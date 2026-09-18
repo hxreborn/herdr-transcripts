@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tui:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install pyte
+      - name: Install fzf
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL https://github.com/junegunn/fzf/releases/download/v0.74.4/fzf-0.74.4-linux_amd64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin
+      - name: Install fzf
+        if: runner.os == 'macOS'
+        run: brew install fzf
+      - run: fzf --version
+      - run: python -m py_compile transcripts.py
+      - run: tests/tui.py

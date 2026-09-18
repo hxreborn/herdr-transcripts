@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+self="$0"
+while [ -L "$self" ]; do
+    link="$(readlink "$self")"
+    case "$link" in
+        /*) self="$link" ;;
+        *) self="$(dirname "$self")/$link" ;;
+    esac
+done
+root="$(cd "$(dirname "$self")" && pwd)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    printf '\n  This Herdr plugin needs python3 (3.8 or newer) on PATH.\n\n'
+    printf '    macOS  brew install python\n'
+    printf '    Arch   pacman -S python\n'
+    printf '    Debian apt install python3\n\n'
+    printf '  Press any key to close.'
+    read -r -n 1 -s </dev/tty || true
+    exit 1
+fi
+
+exec python3 "$root/transcripts.py" "$@"
