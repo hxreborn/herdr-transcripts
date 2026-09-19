@@ -519,6 +519,68 @@ def droid_resume(sid, settings):
     return ["droid", "--resume", sid, *(["--auto", "high"] if settings["skip_permissions"] else [])]
 
 
+COPILOT_STATE = os.path.join(HOME, ".copilot", "session-state")
+COPILOT_WORKSPACE = re.compile(r"^(cwd|branch|summary):[ \t]*(\S.*?)\s*$", re.M)
+
+
+def copilot_sid(path):
+    return os.path.basename(os.path.dirname(path))
+
+
+def copilot_workspace(path):
+    try:
+        with open(os.path.join(os.path.dirname(path), "workspace.yaml"),
+                  encoding="utf-8", errors="replace") as fh:
+            return dict(COPILOT_WORKSPACE.findall(fh.read(4000)))
+    except OSError:
+        return {}
+
+
+def parse_copilot(path):
+    cwd = branch = ""
+    prompts, replies, tools = [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = 0
+    with open(path, "rb") as fh:
+        for raw in fh:
+            head = raw[:64]
+            if not cwd and b'"type":"session.start"' in head:
+                try:
+                    context = (json.loads(raw).get("data") or {}).get("context") or {}
+                except Exception:
+                    context = {}
+                cwd, branch = context.get("cwd") or "", context.get("branch") or ""
+                continue
+            is_user = b'"type":"user.message"' in head
+            if not is_user and b'"type":"assistant.message"' not in head:
+                continue
+            try:
+                data = json.loads(raw).get("data") or {}
+            except Exception:
+                continue
+            text = (data.get("content") or "").strip()
+            if text:
+                turns.append(["you" if is_user else "copilot", normalize(text, CAP_TURN_CHARS)])
+                if total < CAP_TEXT:
+                    (prompts if is_user else replies).append(normalize(text, 1000))
+                    total += min(len(text), 1000)
+            for call in data.get("toolRequests") or []:
+                given = call.get("arguments") if isinstance(call, dict) else None
+                fields = given.items() if isinstance(given, dict) else []
+                text = " ".join(str(v) for k, v in fields if isinstance(v, str) and k != "content")
+                if text and total < CAP_TEXT:
+                    tools.append(normalize(text, 300))
+                    total += min(len(text), 300)
+    workspace = copilot_workspace(path)
+    return make_entry(workspace.get("summary", ""), cwd or workspace.get("cwd", ""),
+                      branch or workspace.get("branch", ""), prompts, replies, tools, turns)
+
+
+def copilot_resume(sid, settings):
+    return ["copilot", f"--resume={sid}",
+            *(["--allow-all-tools"] if settings["skip_permissions"] else [])]
+
+
 PROVIDERS = {
     "claude": {"root": PROJECTS, "files": os.path.join(PROJECTS, "*", "*.jsonl"), "sid": claude_sid,
                "parse": parse_transcript, "resume": claude_resume,
@@ -528,6 +590,9 @@ PROVIDERS = {
     "droid": {"root": DROID_SESSIONS, "files": os.path.join(DROID_SESSIONS, "*.jsonl"), "sid": droid_sid,
               "parse": parse_droid, "resume": droid_resume,
               "install": "curl -fsSL https://app.factory.ai/cli | sh"},
+    "copilot": {"root": COPILOT_STATE, "files": os.path.join(COPILOT_STATE, "*", "events.jsonl"),
+                "sid": copilot_sid, "parse": parse_copilot, "resume": copilot_resume,
+                "install": "npm install -g @github/copilot"},
 }
 
 

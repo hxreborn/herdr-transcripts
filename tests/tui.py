@@ -204,6 +204,7 @@ def state_tests():
     shutil.rmtree(os.path.join(sb.root, ".claude", "projects"))
     shutil.rmtree(os.path.join(sb.root, ".codex", "sessions"))
     shutil.rmtree(os.path.join(sb.root, ".factory", "sessions"))
+    shutil.rmtree(os.path.join(sb.root, ".copilot", "session-state"))
     os.makedirs(os.path.join(sb.root, ".claude", "projects"))
     t = harness.run(sb, cols=90, rows=24)
     t.wait_idle()
@@ -688,6 +689,47 @@ def droid_tests():
           and "--chrome" not in plan, plan)
 
 
+def copilot_tests():
+    print("copilot")
+    sb = harness.sandbox("copilot")
+    sid, cwd = harness.fixtures.COPILOT_SIDS[0], os.path.join(sb.root, "code", "infra")
+    t = harness.run(sb, cols=110, rows=30)
+    t.wait_idle()
+    check("ctrl-a cycles to copilot only", agent_only(t, "copilot only"), t.text())
+    screen = t.text()
+    check("a copilot session lists under the summary from its workspace file",
+          "Cache the rendered tiles on disk" in screen, screen)
+    check("copilot rows carry the directory and branch from the session start",
+          "copilot  ·  infra  ·  feat/tile-cache" in screen, screen)
+    check("a copilot session without a session start falls back to its workspace file",
+          "copilot  ·  dotfiles" in screen and "explain what the prompt hook rewrites" in screen, screen)
+    check("copilot only hides the other agents",
+          "claude  ·" not in screen and "codex  ·" not in screen, screen)
+    check("the copilot preview labels who spoke", "you ›" in screen and "copilot ›" in screen, screen)
+    check("the injected copilot prompt text never reaches the preview",
+          "<current_datetime>" not in screen and "<reminder>" not in screen, screen)
+
+    t.send("transformedleak")
+    check("the transformed copilot prompt never becomes a prompt",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("toolnoise")
+    check("copilot tool output and notifications are not indexed",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("\x1b")
+    t.close()
+
+    plan = dry_resume(sb, cwd, "copilot:" + sid)
+    check("an idle copilot session opens a tab with copilot --resume",
+          plan.startswith("tab copilot:") and f"copilot --resume={sid}" in plan, plan)
+    arm_skip_permissions(sb)
+    plan = dry_resume(sb, cwd, "copilot:" + sid)
+    check("skip-permissions becomes --allow-all-tools for copilot", "--allow-all-tools" in plan, plan)
+    check("claude flags never reach copilot", "--dangerously-skip-permissions" not in plan
+          and "--chrome" not in plan, plan)
+
+
 def main():
     unit_tests()
     codex_tests()
@@ -704,6 +746,7 @@ def main():
     retention_tests()
     diagnostics_tests()
     droid_tests()
+    copilot_tests()
     print()
     if FAILED:
         print(f"{len(FAILED)} failed:")
