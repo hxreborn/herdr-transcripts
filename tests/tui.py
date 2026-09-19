@@ -205,6 +205,7 @@ def state_tests():
     shutil.rmtree(os.path.join(sb.root, ".codex", "sessions"))
     shutil.rmtree(os.path.join(sb.root, ".gemini"))
     shutil.rmtree(os.path.join(sb.root, ".qwen"))
+    shutil.rmtree(os.path.join(sb.root, ".kimi"))
     os.makedirs(os.path.join(sb.root, ".claude", "projects"))
     t = harness.run(sb, cols=90, rows=24)
     t.wait_idle()
@@ -753,11 +754,58 @@ def qwen_tests():
     check("skip-permissions becomes --yolo for qwen", "--yolo" in resume_plan(sb, "qwen:" + sid, cwd))
 
 
+def kimi_tests():
+    print("kimi")
+    sb = harness.sandbox("kimi")
+    t = harness.run(sb, cols=110, rows=30)
+    t.wait_idle()
+    t.send("grafana")
+    screen = t.text()
+    check("a kimi session lists under its first prompt",
+          "the grafana agent keeps restarting on the metrics box" in screen)
+    check("kimi rows say which tool they belong to", "kimi  ·  infra" in screen)
+    check("the kimi preview labels who asked", "you ›" in screen)
+    t.send("\x15")
+    t.send("kubernetes")
+    check("a kimi directory the registry omits still finds its cwd", "kimi  ·  dotfiles" in t.text())
+    t.send("\x15")
+    t.send("MemoryMax")
+    check("the kimi preview labels who answered", "kimi ›" in t.text())
+    t.send("\x15")
+
+    empty_query(t, "kimithoughtnoise", "kimi reasoning is not indexed")
+    empty_query(t, "kimitoolnoise", "kimi tool output is not indexed")
+    empty_query(t, "kiminoise", "kimi system turns never become prompts")
+    empty_query(t, "kimiwirenoise", "the kimi wire log is not indexed")
+
+    t.send("grafana-agent")
+    check("kimi tool calls stay out of the conversation scope",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t\t\t")
+    check("tools scope finds the kimi tool call", "grafana agent keeps restarting" in t.text()
+          and "0/" not in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t")
+    t.send("\x15")
+    check("ctrl-a narrows to kimi", cycle_agent(t, "kimi"))
+    check("no other agent is left in the list", "claude  ·" not in t.text()
+          and "codex  ·" not in t.text(), t.text())
+    t.send("\x1b")
+    t.close()
+
+    sid, cwd = harness.fixtures.MADE["kimi"][0]
+    plan = resume_plan(sb, "kimi:" + sid, cwd)
+    check("an idle kimi session opens a tab with kimi --session",
+          plan.startswith("tab kimi:") and f"kimi --session {sid}" in plan, plan)
+    arm_skip_permissions(sb)
+    check("skip-permissions becomes --yolo for kimi", "--yolo" in resume_plan(sb, "kimi:" + sid, cwd))
+
+
 def main():
     unit_tests()
     codex_tests()
     gemini_tests()
     qwen_tests()
+    kimi_tests()
     picker_tests()
     layout_tests()
     state_tests()

@@ -22,6 +22,7 @@ Search the transcripts of your coding agent sessions, in a
 | [Codex](https://github.com/openai/codex)                      | `~/.codex/sessions`  | `codex resume`    | `--yolo`                         |            |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli)     | `~/.gemini/tmp`      | `gemini --resume` | `--yolo`                         |            |
 | [Qwen Code](https://github.com/QwenLM/qwen-code)              | `~/.qwen/projects`   | `qwen --resume`   | `--yolo`                         |            |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)            | `~/.kimi/sessions`   | `kimi --session`  | `--yolo`                         |            |
 
 ## Screenshots
 

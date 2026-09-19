@@ -499,7 +499,11 @@ GEMINI_HOME = os.path.join(HOME, ".gemini")
 GEMINI_CHATS = os.path.join(GEMINI_HOME, "tmp")
 GEMINI_REGISTRY = os.path.join(GEMINI_HOME, "projects.json")
 QWEN_PROJECTS = os.path.join(HOME, ".qwen", "projects")
+KIMI_HOME = os.path.join(HOME, ".kimi")
+KIMI_SESSIONS = os.path.join(KIMI_HOME, "sessions")
+KIMI_REGISTRY = os.path.join(KIMI_HOME, "kimi.json")
 GEMINI_NOISE = ("<session_context>", "System: ")
+KIMI_NOISE = ("<system>",)
 GEMINI_SESSION = re.compile(rb'"sessionId"\s*:\s*"([^"]+)"')
 PROJECT_PATHS = []
 
@@ -515,6 +519,11 @@ def project_paths():
         except Exception:
             pass
         try:
+            with open(KIMI_REGISTRY) as fh:
+                paths.update(d["path"] for d in json.load(fh).get("work_dirs") or [])
+        except Exception:
+            pass
+        try:
             paths.update(entry["cwd"] for entry in read_index().values() if entry.get("cwd"))
         except Exception:
             pass
@@ -522,6 +531,7 @@ def project_paths():
         for path in paths | set(slugs.values()):
             raw = path.encode()
             lookup[hashlib.sha256(raw).hexdigest()] = path
+            lookup[hashlib.md5(raw).hexdigest()] = path
         PROJECT_PATHS.append(lookup)
     return PROJECT_PATHS[0]
 
@@ -658,12 +668,67 @@ def parse_qwen(path):
     return make_entry("", cwd, branch, prompts, replies, tools, turns)
 
 
+def kimi_sid(path):
+    return os.path.basename(os.path.dirname(path))
+
+
+def parse_kimi(path):
+    cwd = project_cwd(path)
+    prompts, replies, tools = [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = 0
+    with open(path, "rb") as fh:
+        for raw in fh:
+            head = raw[:32]
+            if b'"user"' not in head and b'"assistant"' not in head:
+                continue
+            try:
+                o = json.loads(raw)
+            except Exception:
+                continue
+            role = o.get("role") if isinstance(o, dict) else None
+            if role not in ("user", "assistant"):
+                continue
+            content = o.get("content")
+            texts = []
+            for part in ([{"text": content}] if isinstance(content, str) else content) or []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "image_url":
+                    if role == "user":
+                        turns.append(["you", "[image]"])
+                    continue
+                text = (part.get("text") or "").strip()
+                if text and not text.startswith(KIMI_NOISE):
+                    texts.append(text)
+            for call in o.get("tool_calls") or []:
+                given = call.get("function") if isinstance(call, dict) else None
+                if not isinstance(given, dict) or total >= CAP_TEXT:
+                    continue
+                text = f"{given.get('name') or ''} {given.get('arguments') or ''}".strip()
+                if text:
+                    tools.append(normalize(text, 300))
+                    total += min(len(text), 300)
+            text = " ".join(texts)
+            if not text:
+                continue
+            turns.append(["you" if role == "user" else "kimi", normalize(text, CAP_TURN_CHARS)])
+            if total < CAP_TEXT:
+                (prompts if role == "user" else replies).append(normalize(text, 1000))
+                total += min(len(text), 1000)
+    return make_entry("", cwd, "", prompts, replies, tools, turns)
+
+
 def gemini_resume(sid, settings):
     return ["gemini", "--resume", sid, *(["--yolo"] if settings["skip_permissions"] else [])]
 
 
 def qwen_resume(sid, settings):
     return ["qwen", "--resume", sid, *(["--yolo"] if settings["skip_permissions"] else [])]
+
+
+def kimi_resume(sid, settings):
+    return ["kimi", "--session", sid, *(["--yolo"] if settings["skip_permissions"] else [])]
 
 
 PROVIDERS = {
@@ -678,6 +743,9 @@ PROVIDERS = {
     "qwen": {"root": QWEN_PROJECTS, "files": os.path.join(QWEN_PROJECTS, "*", "chats", "*.jsonl"),
              "sid": qwen_sid, "parse": parse_qwen, "resume": qwen_resume,
              "install": "npm install -g @qwen-code/qwen-code"},
+    "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
+             "sid": kimi_sid, "parse": parse_kimi, "resume": kimi_resume,
+             "install": "uv tool install kimi-cli"},
 }
 
 

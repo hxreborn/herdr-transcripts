@@ -410,6 +410,25 @@ QWEN = [
     },
 ]
 
+KIMI = [
+    {
+        "project": "infra", "age": 10 * HOUR, "registered": True, "noise": True, "wire": True,
+        "turns": [
+            ("you", "the grafana agent keeps restarting on the metrics box"),
+            ("kimi", "It runs out of memory scraping the histogram buckets; the limit is 128MB and it needs 400."),
+            ("you", "Raise it and keep the rest of the unit alone."),
+            ("kimi", "MemoryMax is 512M now, and nothing else in the unit changed."),
+        ],
+        "tools": [("Shell", '{"command": "systemctl status grafana-agent"}')],
+    },
+    {
+        "project": "dotfiles", "age": 12 * HOUR,
+        "turns": [("you", "make the prompt show the kubernetes context only when it is set"),
+                  ("kimi", "The segment is empty unless KUBECONFIG points somewhere, so local shells stay short.")],
+        "tools": [],
+    },
+]
+
 GEMINI_CONTEXT = ("<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\n"
                   "geminicontextnoise\n</session_context>")
 
@@ -530,6 +549,55 @@ def build_qwen(home):
     return [write_qwen(home, index, spec) for index, spec in enumerate(QWEN)]
 
 
+def write_kimi(home, index, spec):
+    cwd = os.path.join(home, "code", spec["project"])
+    os.makedirs(cwd, exist_ok=True)
+    sid = session_id(400 + index)
+    session = os.path.join(home, ".kimi", "sessions", hashlib.md5(cwd.encode()).hexdigest(), sid)
+    os.makedirs(session, exist_ok=True)
+    lines = [{"role": "_checkpoint", "id": 0}]
+    tools = list(spec.get("tools", []))
+    for who, text in spec["turns"]:
+        if who == "you":
+            lines.append({"role": "user", "content": text})
+            continue
+        record = {"role": "assistant",
+                  "content": [{"type": "think", "think": "kimithoughtnoise", "encrypted": None},
+                              {"type": "text", "text": text}]}
+        if tools:
+            name, arg = tools.pop(0)
+            record["tool_calls"] = [{"type": "function", "id": "tool_1",
+                                     "function": {"name": name, "arguments": arg}}]
+        lines.append(record)
+        lines.append({"role": "_usage", "token_count": 1200})
+        if record.get("tool_calls"):
+            lines.append({"role": "tool", "tool_call_id": "tool_1",
+                          "content": [{"type": "text", "text": "kimitoolnoise"}]})
+        lines.append({"role": "_checkpoint", "id": 1})
+    if spec.get("noise"):
+        lines.append({"role": "user", "content": [{"type": "text", "text": "<system>CHECKPOINT 1 kiminoise</system>"}]})
+    path = os.path.join(session, "context.jsonl")
+    with open(path, "w") as fh:
+        for line in lines:
+            fh.write(json.dumps(line) + "\n")
+    if spec.get("wire"):
+        with open(os.path.join(session, "wire.jsonl"), "w") as fh:
+            fh.write(json.dumps({"type": "metadata", "protocol_version": "1.1", "note": "kimiwirenoise"}) + "\n")
+    when = time.time() - spec["age"]
+    os.utime(path, (when, when))
+    return sid, cwd
+
+
+def build_kimi(home):
+    shutil.rmtree(os.path.join(home, ".kimi"), ignore_errors=True)
+    made = [write_kimi(home, index, spec) for index, spec in enumerate(KIMI)]
+    work_dirs = [{"path": cwd, "kaos": "local", "last_session_id": sid}
+                 for (sid, cwd), spec in zip(made, KIMI) if spec.get("registered")]
+    with open(os.path.join(home, ".kimi", "kimi.json"), "w") as fh:
+        json.dump({"work_dirs": work_dirs}, fh)
+    return made
+
+
 def build(home):
     root = os.path.join(home, ".claude", "projects")
     shutil.rmtree(root, ignore_errors=True)
@@ -549,6 +617,7 @@ def build(home):
         json.dump({"cleanupPeriodDays": 3650}, fh, indent=2)
     MADE["gemini"] = build_gemini(home)
     MADE["qwen"] = build_qwen(home)
+    MADE["kimi"] = build_kimi(home)
     return made
 
 
