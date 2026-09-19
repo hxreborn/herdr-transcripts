@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-09-19
 
 ### Added
 
@@ -47,4 +47,5 @@ All notable changes to this project are documented here. The format follows
 - Diagnostics overlay (`Ctrl+D`) covering dependency versions, index state,
   session counts and Claude Code's `cleanupPeriodDays`, with a one-key fix.
 
+[1.1.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/hxreborn/herdr-transcripts/releases/tag/v1.0.0
