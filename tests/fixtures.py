@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import hashlib
 import json
 import os
 import random
@@ -556,6 +557,248 @@ def write_session(root, home, index, spec):
     return sid, cwd
 
 
+GEMINI = [
+    {
+        "summary": "Stop the changelog from repeating entries", "project": "checkout-api", "age": 7 * HOUR,
+        "slug": "checkout-api", "legacy": True, "info": True, "continued": True,
+        "turns": [
+            ("you", "the changelog repeats every entry twice since the last tag"),
+            ("gemini", "It walks the merge commits and the squashed commits both, so first-parent leaves one line per change."),
+            ("you", "Keep the breaking changes on top."),
+            ("gemini", "Breaking changes are their own section now, above features and fixes."),
+        ],
+        "tools": [("run_shell_command", "pytest tests/changelog_test.py -x")],
+    },
+    {
+        "summary": None, "project": "atlas-web", "age": 15 * HOUR, "repeated": True,
+        "turns": [
+            ("you", "walk me through the presence heartbeat in the dashboard"),
+            ("gemini", "The client pings on a timer and drops the session after two missed beats."),
+        ],
+        "tools": [("read_file", "src/ws/presence.ts")],
+    },
+    {
+        "summary": None, "project": "vanished", "age": 17 * HOUR,
+        "turns": [("you", "geminiorphan where does this session live"),
+                  ("gemini", "In a directory no registry knows about.")],
+        "tools": [],
+    },
+    {
+        "summary": None, "project": "checkout-api", "age": 19 * HOUR, "slug": "checkout-api",
+        "kind": "subagent",
+        "turns": [("you", "geminidelegate audit the retry ceiling"),
+                  ("gemini", "The ceiling is five attempts.")],
+        "tools": [],
+    },
+    {
+        "summary": None, "project": "checkout-api", "age": 21 * HOUR, "slug": "checkout-api",
+        "legacy": True, "info": True, "turns": [], "tools": [],
+    },
+    {
+        "summary": "Pin the pager rotation to the on-call calendar", "project": "notebook", "age": 23 * HOUR,
+        "turns": [("you", "geminilatecomer why does the pager rotation ignore the calendar"),
+                  ("gemini", "The rotation reads a stale copy of the calendar.")],
+        "tools": [],
+    },
+]
+
+QWEN = [
+    {
+        "project": "infra", "branch": "main", "age": 9 * HOUR, "sidechain": True,
+        "turns": [("you", "why does the pager rotation skip the weekend shift?"),
+                  ("qwen", "The rotation is seven days long but the schedule starts on a Monday.")],
+        "tools": [("read_file", "runbooks/pager.md")],
+    },
+]
+
+KIMI = [
+    {
+        "project": "infra", "age": 10 * HOUR, "registered": True, "noise": True, "wire": True,
+        "turns": [
+            ("you", "the grafana agent keeps restarting on the metrics box"),
+            ("kimi", "It runs out of memory scraping the histogram buckets; the limit is 128MB and it needs 400."),
+            ("you", "Raise it and keep the rest of the unit alone."),
+            ("kimi", "MemoryMax is 512M now, and nothing else in the unit changed."),
+        ],
+        "tools": [("Shell", '{"command": "systemctl status grafana-agent"}')],
+    },
+    {
+        "project": "dotfiles", "age": 12 * HOUR,
+        "turns": [("you", "make the prompt show the kubernetes context only when it is set"),
+                  ("kimi", "The segment is empty unless KUBECONFIG points somewhere, so local shells stay short.")],
+        "tools": [],
+    },
+]
+
+GEMINI_CONTEXT = ("<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\n"
+                  "geminicontextnoise\n</session_context>")
+
+MADE = {}
+
+
+def gemini_message(index, who, text, call=None):
+    stamp = {"id": f"m{index}", "timestamp": "2026-09-17T10:00:00.000Z"}
+    if who == "you":
+        return dict(stamp, type="user", content=[{"text": text}])
+    message = dict(stamp, type="gemini", content=text, model="gemini-3-flash",
+                   thoughts=[{"subject": "geminithoughtnoise", "description": "geminithoughtnoise"}],
+                   tokens={"total": 900})
+    if call:
+        name, arg = call
+        message["toolCalls"] = [{"id": "call_1", "name": name, "args": {"path": arg},
+                                 "result": [{"functionResponse": {"response": {"output": "geminitoolnoise"}}}]}]
+    return message
+
+
+def write_gemini(home, index, spec):
+    cwd = os.path.join(home, "code", spec["project"])
+    os.makedirs(cwd, exist_ok=True)
+    digest = hashlib.sha256(cwd.encode()).hexdigest()
+    chats = os.path.join(home, ".gemini", "tmp", spec.get("slug") or digest, "chats")
+    os.makedirs(chats, exist_ok=True)
+    sid = session_id(200 + index)
+    meta = {"sessionId": sid, "projectHash": digest, "startTime": "2026-09-17T10:00:00.000Z",
+            "lastUpdated": "2026-09-17T10:05:00.000Z"}
+    if spec.get("summary"):
+        meta["summary"] = spec["summary"]
+    if spec.get("kind"):
+        meta["kind"] = spec["kind"]
+    messages = []
+    if spec.get("info"):
+        messages.append({"id": "i0", "timestamp": "2026-09-17T10:00:00.000Z", "type": "info",
+                         "content": "Update successful! geminiinfonoise"})
+    tools = list(spec.get("tools", []))
+    for n, (who, text) in enumerate(spec["turns"]):
+        call = tools.pop(0) if tools and who != "you" else None
+        messages.append(gemini_message(n, who, text, call))
+    if spec.get("continued"):
+        messages.append({"id": "c0", "timestamp": "2026-09-17T10:00:00.000Z", "type": "user",
+                         "content": "System: Please continue. geminisystemnoise"})
+    path = os.path.join(chats, f"session-2026-09-17T10-00-{sid[:8]}.json")
+    if spec.get("legacy"):
+        with open(path, "w") as fh:
+            json.dump(dict(meta, messages=messages), fh)
+    else:
+        lines = [meta, {"$set": {"messages": [gemini_message("b", "you", GEMINI_CONTEXT)]}}]
+        for message in messages:
+            lines.append(message)
+            lines.append({"$set": {"lastUpdated": "2026-09-17T10:05:00.000Z"}})
+        if spec.get("repeated"):
+            lines.append(messages[-1])
+        path += "l"
+        with open(path, "w") as fh:
+            for line in lines:
+                fh.write(json.dumps(line, separators=(",", ":")) + "\n")
+    when = time.time() - spec["age"]
+    os.utime(path, (when, when))
+    return sid, cwd
+
+
+def build_gemini(home):
+    shutil.rmtree(os.path.join(home, ".gemini"), ignore_errors=True)
+    made = [write_gemini(home, index, spec) for index, spec in enumerate(GEMINI)]
+    projects = {os.path.join(home, "code", name): name
+                for name in ("checkout-api", "atlas-web", "dotfiles")}
+    with open(os.path.join(home, ".gemini", "projects.json"), "w") as fh:
+        json.dump({"projects": projects}, fh)
+    return made
+
+
+def qwen_record(kind, sid, cwd, branch, parts, sidechain=False):
+    record = {"uuid": session_id(500), "parentUuid": None, "sessionId": sid,
+              "timestamp": "2026-09-17T10:00:00.000Z", "type": kind, "cwd": cwd,
+              "version": "0.24.1", "gitBranch": branch,
+              "message": {"role": "model" if kind == "assistant" else "user", "parts": parts}}
+    if sidechain:
+        record["isSidechain"] = True
+    return record
+
+
+def write_qwen(home, index, spec):
+    cwd = os.path.join(home, "code", spec["project"])
+    os.makedirs(cwd, exist_ok=True)
+    sid = session_id(300 + index)
+    chats = os.path.join(home, ".qwen", "projects", cwd.replace("/", "-"), "chats")
+    os.makedirs(chats, exist_ok=True)
+    branch = spec["branch"]
+    lines = []
+    tools = list(spec.get("tools", []))
+    for who, text in spec["turns"]:
+        if who == "you":
+            lines.append(qwen_record("user", sid, cwd, branch, [{"text": text}]))
+            continue
+        lines.append(qwen_record("assistant", sid, cwd, branch, [{"text": text}]))
+        if tools:
+            name, arg = tools.pop(0)
+            lines.append(qwen_record("assistant", sid, cwd, branch,
+                                     [{"functionCall": {"name": name, "args": {"path": arg}}}]))
+            lines.append(qwen_record("tool_result", sid, cwd, branch,
+                                     [{"functionResponse": {"name": name, "response": {"output": "qwentoolnoise"}}}]))
+    if spec.get("sidechain"):
+        lines.append(qwen_record("user", sid, cwd, branch, [{"text": "qwendelegate audit the rotation"}], True))
+    path = os.path.join(chats, sid + ".jsonl")
+    with open(path, "w") as fh:
+        for line in lines:
+            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
+    when = time.time() - spec["age"]
+    os.utime(path, (when, when))
+    return sid, cwd
+
+
+def build_qwen(home):
+    shutil.rmtree(os.path.join(home, ".qwen"), ignore_errors=True)
+    return [write_qwen(home, index, spec) for index, spec in enumerate(QWEN)]
+
+
+def write_kimi(home, index, spec):
+    cwd = os.path.join(home, "code", spec["project"])
+    os.makedirs(cwd, exist_ok=True)
+    sid = session_id(400 + index)
+    session = os.path.join(home, ".kimi", "sessions", hashlib.md5(cwd.encode()).hexdigest(), sid)
+    os.makedirs(session, exist_ok=True)
+    lines = [{"role": "_checkpoint", "id": 0}]
+    tools = list(spec.get("tools", []))
+    for who, text in spec["turns"]:
+        if who == "you":
+            lines.append({"role": "user", "content": text})
+            continue
+        record = {"role": "assistant",
+                  "content": [{"type": "think", "think": "kimithoughtnoise", "encrypted": None},
+                              {"type": "text", "text": text}]}
+        if tools:
+            name, arg = tools.pop(0)
+            record["tool_calls"] = [{"type": "function", "id": "tool_1",
+                                     "function": {"name": name, "arguments": arg}}]
+        lines.append(record)
+        lines.append({"role": "_usage", "token_count": 1200})
+        if record.get("tool_calls"):
+            lines.append({"role": "tool", "tool_call_id": "tool_1",
+                          "content": [{"type": "text", "text": "kimitoolnoise"}]})
+        lines.append({"role": "_checkpoint", "id": 1})
+    if spec.get("noise"):
+        lines.append({"role": "user", "content": [{"type": "text", "text": "<system>CHECKPOINT 1 kiminoise</system>"}]})
+    path = os.path.join(session, "context.jsonl")
+    with open(path, "w") as fh:
+        for line in lines:
+            fh.write(json.dumps(line) + "\n")
+    if spec.get("wire"):
+        with open(os.path.join(session, "wire.jsonl"), "w") as fh:
+            fh.write(json.dumps({"type": "metadata", "protocol_version": "1.1", "note": "kimiwirenoise"}) + "\n")
+    when = time.time() - spec["age"]
+    os.utime(path, (when, when))
+    return sid, cwd
+
+
+def build_kimi(home):
+    shutil.rmtree(os.path.join(home, ".kimi"), ignore_errors=True)
+    made = [write_kimi(home, index, spec) for index, spec in enumerate(KIMI)]
+    work_dirs = [{"path": cwd, "kaos": "local", "last_session_id": sid}
+                 for (sid, cwd), spec in zip(made, KIMI) if spec.get("registered")]
+    with open(os.path.join(home, ".kimi", "kimi.json"), "w") as fh:
+        json.dump({"work_dirs": work_dirs}, fh)
+    return made
+
+
 def build(home):
     root = os.path.join(home, ".claude", "projects")
     shutil.rmtree(root, ignore_errors=True)
@@ -575,6 +818,9 @@ def build(home):
         json.dump({"cleanupPeriodDays": 3650}, fh, indent=2)
     build_droid(home)
     build_copilot(home)
+    MADE["gemini"] = build_gemini(home)
+    MADE["qwen"] = build_qwen(home)
+    MADE["kimi"] = build_kimi(home)
     return made
 
 

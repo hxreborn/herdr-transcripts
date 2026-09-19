@@ -206,6 +206,9 @@ def state_tests():
     shutil.rmtree(os.path.join(sb.root, ".local", "share", "opencode"))
     shutil.rmtree(os.path.join(sb.root, ".factory", "sessions"))
     shutil.rmtree(os.path.join(sb.root, ".copilot", "session-state"))
+    shutil.rmtree(os.path.join(sb.root, ".gemini"))
+    shutil.rmtree(os.path.join(sb.root, ".qwen"))
+    shutil.rmtree(os.path.join(sb.root, ".kimi"))
     os.makedirs(os.path.join(sb.root, ".claude", "projects"))
     t = harness.run(sb, cols=90, rows=24)
     t.wait_idle()
@@ -523,7 +526,7 @@ def diagnostics_tests():
                            os.path.join(sb.root, "code", "odd").replace("/", "-"))
     os.makedirs(os.path.join(project, "55555555-5555-4555-8555-555555555555.jsonl"))
 
-    t = harness.run(sb, cols=100, rows=54)
+    t = harness.run(sb, cols=100, rows=70)
     t.wait_idle()
     t.send("\x04")
     screen = t.text()
@@ -539,7 +542,7 @@ def diagnostics_tests():
     with open(index, "w") as fh:
         fh.write("{ not json\n")
     t = harness.Term([harness.PLUGIN + "/transcripts", "overlay", "diagnostics"],
-                     sb.env(), cols=100, rows=54)
+                     sb.env(), cols=100, rows=70)
     t.wait_idle()
     check("a corrupt index is not called missing", "not built yet" not in t.text(), t.text())
     check("a corrupt index says so", "is unreadable" in t.text(), t.text())
@@ -549,7 +552,7 @@ def diagnostics_tests():
         fh.write("#!/bin/sh\necho 'herdr: socket not found' >&2\nexit 1\n")
     os.chmod(sb.herdr, 0o755)
     t = harness.Term([harness.PLUGIN + "/transcripts", "overlay", "diagnostics"],
-                     sb.env(), cols=100, rows=54)
+                     sb.env(), cols=100, rows=70)
     t.wait_idle()
     check("a failing herdr is not shown as healthy", "live agents" not in t.text(), t.text())
     check("a failing herdr reports the reason", "socket not found" in t.text(), t.text())
@@ -642,6 +645,21 @@ def dry_resume(sb, cwd, uid):
     env = dict(sb.env(), TRANSCRIPTS_DRY_RUN="1")
     return subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, uid],
                           env=env, capture_output=True, text=True, cwd=env["HOME"]).stdout
+
+
+def cycle_agent(t, name):
+    for _ in range(10):
+        if f"{name} only" in t.text():
+            return True
+        t.send("\x01")
+    return False
+
+
+def resume_plan(sb, uid, cwd, **extra):
+    env = dict(sb.env(), TRANSCRIPTS_DRY_RUN="1", **extra)
+    done = subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, uid],
+                          env=env, capture_output=True, text=True, cwd=env["HOME"])
+    return done.stdout.strip() or done.stderr.strip()
 
 
 def arm_skip_permissions(sb):
@@ -795,10 +813,170 @@ def copilot_tests():
           and "--chrome" not in plan, plan)
 
 
+def empty_query(t, query, name):
+    t.send(query)
+    check(name, "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+
+
+def gemini_tests():
+    print("gemini")
+    sb = harness.sandbox("gemini")
+    t = harness.run(sb, cols=110, rows=30)
+    t.wait_idle()
+    t.send("changelog")
+    screen = t.text()
+    check("a summarised gemini session lists under its summary",
+          "Stop the changelog from repeating entries" in screen)
+    check("gemini rows say which tool they belong to", "gemini  ·  checkout-api" in screen)
+    t.send("\x15")
+
+    t.send("heartbeat")
+    screen = t.text()
+    check("an unsummarised gemini session falls back to its first prompt",
+          "walk me through the presence heartbeat" in screen)
+    check("a gemini session in a hashed directory finds its cwd", "gemini  ·  atlas-web" in screen)
+    check("the gemini preview labels who asked", "you ›" in screen)
+    check("a message recorded twice is previewed once", "1 of 2 messages match" in screen, screen)
+    t.send("\x15")
+    t.send("beats")
+    check("the gemini preview labels who answered", "gemini ›" in t.text())
+    t.send("\x15")
+
+    empty_query(t, "geminicontextnoise", "the gemini session context block never becomes a prompt")
+    empty_query(t, "geminisystemnoise", "gemini continuation prompts never become prompts")
+    empty_query(t, "geminiinfonoise", "gemini info messages are not indexed")
+    empty_query(t, "geminithoughtnoise", "gemini reasoning is not indexed")
+    empty_query(t, "geminitoolnoise", "gemini tool output is not indexed")
+    empty_query(t, "geminiorphan", "a gemini session with no resolvable directory stays hidden")
+    empty_query(t, "geminidelegate", "gemini subagent threads stay hidden")
+
+    t.send("changelog_test")
+    check("gemini tool calls stay out of the conversation scope",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t\t\t")
+    check("tools scope finds the gemini tool call", "Stop the changelog from repeating entries" in t.text()
+          and "0/" not in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t")
+    t.send("\x15")
+    check("ctrl-a narrows to gemini", cycle_agent(t, "gemini"))
+    check("no other agent is left in the list", "claude  ·" not in t.text()
+          and "codex  ·" not in t.text(), t.text())
+    t.send("\x1b")
+    t.close()
+
+    sid, cwd = harness.fixtures.MADE["gemini"][0]
+    plan = resume_plan(sb, "gemini:" + sid, cwd)
+    check("an idle gemini session opens a tab with gemini --resume",
+          plan.startswith("tab gemini:") and f"gemini --resume {sid}" in plan, plan)
+    arm_skip_permissions(sb)
+    check("skip-permissions becomes --yolo for gemini", "--yolo" in resume_plan(sb, "gemini:" + sid, cwd))
+    check("claude flags never reach gemini",
+          "--chrome" not in resume_plan(sb, "gemini:" + sid, cwd))
+
+    sid, cwd = harness.fixtures.MADE["gemini"][-1]
+    shutil.rmtree(os.path.join(sb.root, ".cache", "herdr-transcripts"), ignore_errors=True)
+    rows = [subprocess.run([harness.PLUGIN + "/transcripts", "list"], env=sb.env(), capture_output=True,
+                           text=True, cwd=sb.root).stdout for _ in range(2)]
+    check("a hashed gemini directory known only from another agent's sessions is hidden on a cold index",
+          sid not in rows[0])
+    check("the next index pass resolves it from the other agent's directory", sid in rows[1])
+
+
+def qwen_tests():
+    print("qwen")
+    sb = harness.sandbox("qwen")
+    t = harness.run(sb, cols=110, rows=30)
+    t.wait_idle()
+    t.send("weekend")
+    screen = t.text()
+    check("a qwen session lists under its first prompt",
+          "why does the pager rotation skip the weekend shift" in screen)
+    check("qwen rows carry the tool, the cwd and the branch", "qwen  ·  infra  ·  main" in screen)
+    check("the qwen preview labels who asked", "you ›" in screen)
+    t.send("\x15")
+    t.send("Monday")
+    check("the qwen preview labels who answered", "qwen ›" in t.text())
+    t.send("\x15")
+
+    empty_query(t, "qwentoolnoise", "qwen tool output is not indexed")
+    empty_query(t, "qwendelegate", "qwen sidechain turns stay out of the list")
+
+    t.send("runbooks/pager.md")
+    check("qwen tool calls stay out of the conversation scope",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t\t\t")
+    check("tools scope finds the qwen tool call", "weekend shift" in t.text()
+          and "0/" not in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t")
+    t.send("\x15")
+    check("ctrl-a narrows to qwen", cycle_agent(t, "qwen"))
+    check("no other agent is left in the list", "claude  ·" not in t.text()
+          and "codex  ·" not in t.text(), t.text())
+    t.send("\x1b")
+    t.close()
+
+    sid, cwd = harness.fixtures.MADE["qwen"][0]
+    plan = resume_plan(sb, "qwen:" + sid, cwd)
+    check("an idle qwen session opens a tab with qwen --resume",
+          plan.startswith("tab qwen:") and f"qwen --resume {sid}" in plan, plan)
+    arm_skip_permissions(sb)
+    check("skip-permissions becomes --yolo for qwen", "--yolo" in resume_plan(sb, "qwen:" + sid, cwd))
+
+
+def kimi_tests():
+    print("kimi")
+    sb = harness.sandbox("kimi")
+    t = harness.run(sb, cols=110, rows=30)
+    t.wait_idle()
+    t.send("grafana")
+    screen = t.text()
+    check("a kimi session lists under its first prompt",
+          "the grafana agent keeps restarting on the metrics box" in screen)
+    check("kimi rows say which tool they belong to", "kimi  ·  infra" in screen)
+    check("the kimi preview labels who asked", "you ›" in screen)
+    t.send("\x15")
+    t.send("kubernetes")
+    check("a kimi directory the registry omits still finds its cwd", "kimi  ·  dotfiles" in t.text())
+    t.send("\x15")
+    t.send("MemoryMax")
+    check("the kimi preview labels who answered", "kimi ›" in t.text())
+    t.send("\x15")
+
+    empty_query(t, "kimithoughtnoise", "kimi reasoning is not indexed")
+    empty_query(t, "kimitoolnoise", "kimi tool output is not indexed")
+    empty_query(t, "kiminoise", "kimi system turns never become prompts")
+    empty_query(t, "kimiwirenoise", "the kimi wire log is not indexed")
+
+    t.send("grafana-agent")
+    check("kimi tool calls stay out of the conversation scope",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t\t\t")
+    check("tools scope finds the kimi tool call", "grafana agent keeps restarting" in t.text()
+          and "0/" not in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t")
+    t.send("\x15")
+    check("ctrl-a narrows to kimi", cycle_agent(t, "kimi"))
+    check("no other agent is left in the list", "claude  ·" not in t.text()
+          and "codex  ·" not in t.text(), t.text())
+    t.send("\x1b")
+    t.close()
+
+    sid, cwd = harness.fixtures.MADE["kimi"][0]
+    plan = resume_plan(sb, "kimi:" + sid, cwd)
+    check("an idle kimi session opens a tab with kimi --session",
+          plan.startswith("tab kimi:") and f"kimi --session {sid}" in plan, plan)
+    arm_skip_permissions(sb)
+    check("skip-permissions becomes --yolo for kimi", "--yolo" in resume_plan(sb, "kimi:" + sid, cwd))
+
+
 def main():
     unit_tests()
     codex_tests()
     opencode_tests()
+    gemini_tests()
+    qwen_tests()
+    kimi_tests()
     picker_tests()
     layout_tests()
     state_tests()

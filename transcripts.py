@@ -621,6 +621,237 @@ def parse_copilot(path):
                       branch or workspace.get("branch", ""), prompts, replies, tools, turns)
 
 
+GEMINI_HOME = os.path.join(HOME, ".gemini")
+GEMINI_CHATS = os.path.join(GEMINI_HOME, "tmp")
+GEMINI_REGISTRY = os.path.join(GEMINI_HOME, "projects.json")
+QWEN_PROJECTS = os.path.join(HOME, ".qwen", "projects")
+KIMI_HOME = os.path.join(HOME, ".kimi")
+KIMI_SESSIONS = os.path.join(KIMI_HOME, "sessions")
+KIMI_REGISTRY = os.path.join(KIMI_HOME, "kimi.json")
+GEMINI_NOISE = ("<session_context>", "System: ")
+KIMI_NOISE = ("<system>",)
+GEMINI_SESSION = re.compile(rb'"sessionId"\s*:\s*"([^"]+)"')
+PROJECT_PATHS = []
+
+
+def project_paths(cache=None):
+    if not PROJECT_PATHS:
+        import hashlib
+        slugs, paths = {}, set()
+        try:
+            with open(GEMINI_REGISTRY) as fh:
+                for path, slug in (json.load(fh).get("projects") or {}).items():
+                    slugs[slug] = path
+        except Exception:
+            pass
+        try:
+            with open(KIMI_REGISTRY) as fh:
+                paths.update(d["path"] for d in json.load(fh).get("work_dirs") or [])
+        except Exception:
+            pass
+        try:
+            paths.update(entry["cwd"] for entry in (cache or read_index()).values() if entry.get("cwd"))
+        except Exception:
+            pass
+        lookup = dict(slugs)
+        for path in paths | set(slugs.values()):
+            raw = path.encode()
+            lookup[hashlib.sha256(raw).hexdigest()] = path
+            lookup[hashlib.md5(raw).hexdigest()] = path
+        PROJECT_PATHS.append(lookup)
+    return PROJECT_PATHS[0]
+
+
+def project_cwd(path):
+    return project_paths().get(os.path.basename(os.path.dirname(os.path.dirname(path))), "")
+
+
+def hashed_entry(title, cwd, branch, prompts, replies, tools, turns):
+    entry, turns = make_entry(title, cwd, branch, prompts, replies, tools, turns)
+    if not cwd:
+        entry["paths"] = len(project_paths())
+    return entry, turns
+
+
+def gemini_sid(path):
+    with open(path, "rb") as fh:
+        found = GEMINI_SESSION.search(fh.read(4096))
+    return found.group(1).decode() if found else os.path.basename(path).partition(".")[0]
+
+
+def gemini_records(path):
+    if not path.endswith(".jsonl"):
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            data = json.load(fh)
+        return data, data.get("messages") or []
+    meta, messages = {}, {}
+    with open(path, "rb") as fh:
+        for raw in fh:
+            try:
+                o = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(o, dict):
+                continue
+            patch = o.get("$set")
+            if isinstance(patch, dict):
+                if isinstance(patch.get("messages"), list):
+                    messages = {m.get("id"): m for m in patch["messages"] if isinstance(m, dict)}
+                meta.update(patch)
+            elif o.get("type"):
+                messages[o.get("id")] = o
+            elif o.get("sessionId"):
+                meta = o
+    return meta, list(messages.values())
+
+
+def parse_gemini(path):
+    meta, messages = gemini_records(path)
+    cwd = project_cwd(path) if (meta.get("kind") or "main") == "main" else ""
+    prompts, replies, tools = [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        kind = message.get("type")
+        if kind not in ("user", "gemini"):
+            continue
+        content = message.get("content")
+        texts = []
+        for part in ([{"text": content}] if isinstance(content, str) else content) or []:
+            if not isinstance(part, dict):
+                continue
+            if "inlineData" in part:
+                if kind == "user":
+                    turns.append(["you", "[image]"])
+                continue
+            text = (part.get("text") or "").strip()
+            if text and not text.startswith(GEMINI_NOISE):
+                texts.append(text)
+        for call in message.get("toolCalls") or []:
+            if not isinstance(call, dict) or total >= CAP_TEXT:
+                continue
+            given = call.get("args")
+            fields = given.values() if isinstance(given, dict) else []
+            text = " ".join([str(call.get("name") or ""), *(v for v in fields if isinstance(v, str))]).strip()
+            if text:
+                tools.append(normalize(text, 300))
+                total += min(len(text), 300)
+        text = " ".join(texts)
+        if not text:
+            continue
+        turns.append(["you" if kind == "user" else "gemini", normalize(text, CAP_TURN_CHARS)])
+        if total < CAP_TEXT:
+            (prompts if kind == "user" else replies).append(normalize(text, 1000))
+            total += min(len(text), 1000)
+    return hashed_entry(meta.get("summary") or "", cwd, "", prompts, replies, tools, turns)
+
+
+def qwen_sid(path):
+    return os.path.basename(path)[:-len(".jsonl")]
+
+
+def parse_qwen(path):
+    cwd = branch = ""
+    prompts, replies, tools = [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = 0
+    with open(path, "rb") as fh:
+        for raw in fh:
+            head = raw[:400]
+            is_user = b'"type":"user"' in head
+            if not is_user and b'"type":"assistant"' not in head:
+                continue
+            try:
+                o = json.loads(raw)
+            except Exception:
+                continue
+            if o.get("isSidechain"):
+                continue
+            if not cwd:
+                cwd, branch = o.get("cwd") or "", o.get("gitBranch") or ""
+            texts = []
+            for part in (o.get("message") or {}).get("parts") or []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("inlineData"):
+                    if is_user:
+                        turns.append(["you", "[image]"])
+                    continue
+                call = part.get("functionCall")
+                if isinstance(call, dict):
+                    given = call.get("args")
+                    fields = given.values() if isinstance(given, dict) else []
+                    text = " ".join([str(call.get("name") or ""), *(v for v in fields if isinstance(v, str))]).strip()
+                    if text and total < CAP_TEXT:
+                        tools.append(normalize(text, 300))
+                        total += min(len(text), 300)
+                    continue
+                text = (part.get("text") or "").strip()
+                if text:
+                    texts.append(text)
+            text = " ".join(texts)
+            if not text:
+                continue
+            turns.append(["you" if is_user else "qwen", normalize(text, CAP_TURN_CHARS)])
+            if total < CAP_TEXT:
+                (prompts if is_user else replies).append(normalize(text, 1000))
+                total += min(len(text), 1000)
+    return make_entry("", cwd, branch, prompts, replies, tools, turns)
+
+
+def kimi_sid(path):
+    return os.path.basename(os.path.dirname(path))
+
+
+def parse_kimi(path):
+    cwd = project_cwd(path)
+    prompts, replies, tools = [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = 0
+    with open(path, "rb") as fh:
+        for raw in fh:
+            head = raw[:32]
+            if b'"user"' not in head and b'"assistant"' not in head:
+                continue
+            try:
+                o = json.loads(raw)
+            except Exception:
+                continue
+            role = o.get("role") if isinstance(o, dict) else None
+            if role not in ("user", "assistant"):
+                continue
+            content = o.get("content")
+            texts = []
+            for part in ([{"text": content}] if isinstance(content, str) else content) or []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "image_url":
+                    if role == "user":
+                        turns.append(["you", "[image]"])
+                    continue
+                text = (part.get("text") or "").strip()
+                if text and not text.startswith(KIMI_NOISE):
+                    texts.append(text)
+            for call in o.get("tool_calls") or []:
+                given = call.get("function") if isinstance(call, dict) else None
+                if not isinstance(given, dict) or total >= CAP_TEXT:
+                    continue
+                text = f"{given.get('name') or ''} {given.get('arguments') or ''}".strip()
+                if text:
+                    tools.append(normalize(text, 300))
+                    total += min(len(text), 300)
+            text = " ".join(texts)
+            if not text:
+                continue
+            turns.append(["you" if role == "user" else "kimi", normalize(text, CAP_TURN_CHARS)])
+            if total < CAP_TEXT:
+                (prompts if role == "user" else replies).append(normalize(text, 1000))
+                total += min(len(text), 1000)
+    return hashed_entry("", cwd, "", prompts, replies, tools, turns)
+
+
 PROVIDERS = {
     "claude": {"root": PROJECTS, "files": os.path.join(PROJECTS, "*", "*.jsonl"), "sid": jsonl_sid,
                "parse": parse_transcript, "resume": ("claude", "--resume", "{sid}"),
@@ -640,6 +871,15 @@ PROVIDERS = {
                 "sid": copilot_sid, "parse": parse_copilot, "resume": ("copilot", "--resume={sid}"),
                 "flags": {"skip_permissions": ("--allow-all-tools",)},
                 "install": "npm install -g @github/copilot"},
+                  "gemini": {"root": GEMINI_CHATS, "files": os.path.join(GEMINI_CHATS, "*", "chats", "*.json*"),
+               "sid": gemini_sid, "parse": parse_gemini, "resume": ("gemini", "--resume", "{sid}"), "flags": {"skip_permissions": ("--yolo",)},
+               "install": "npm install -g @google/gemini-cli"},
+    "qwen": {"root": QWEN_PROJECTS, "files": os.path.join(QWEN_PROJECTS, "*", "chats", "*.jsonl"),
+             "sid": qwen_sid, "parse": parse_qwen, "resume": ("qwen", "--resume", "{sid}"), "flags": {"skip_permissions": ("--yolo",)},
+             "install": "npm install -g @qwen-code/qwen-code"},
+    "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
+             "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"), "flags": {"skip_permissions": ("--yolo",)},
+             "install": "uv tool install kimi-cli"},
 }
 
 
@@ -711,7 +951,8 @@ def load_cache(files):
     except Exception:
         cache = {}
     stale = [(uid, path, size) for mtime, size, uid, path, key in files
-             if (cache.get(uid) or {}).get("key") != key or not os.path.exists(turns_path(uid))]
+             if (cache.get(uid) or {}).get("key") != key or not os.path.exists(turns_path(uid))
+             or "paths" in cache[uid] and cache[uid]["paths"] != len(project_paths(cache))]
     return cache, stale
 
 
@@ -723,10 +964,11 @@ def index_entries(files):
         fcntl.flock(lock, fcntl.LOCK_EX)
         cache, stale = load_cache(files)
     parsed = parse_jobs([(uid, path) for uid, path, _ in stale], sum(size for _, _, size in stale))
+    reparse = {uid for uid, _, _ in stale}
     fresh = {}
     for mtime, size, uid, path, key in files:
         entry = cache.get(uid)
-        if not entry or entry.get("key") != key or not os.path.exists(turns_path(uid)):
+        if uid in reparse:
             result = next(parsed)
             if result is None:
                 continue
