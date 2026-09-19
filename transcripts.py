@@ -43,7 +43,7 @@ RETENTION_TARGET = 3650
 CAP_TEXT = 120000
 CAP_TURNS = 200
 CAP_TURN_CHARS = 400
-INDEX_VERSION = "v4"
+INDEX_VERSION = "v5"
 POOL_MIN_BYTES = 24 << 20
 
 R = "\033[0m"
@@ -950,7 +950,7 @@ def load_cache(files):
         cache = read_index()
     except Exception:
         cache = {}
-    stale = [(uid, path, size) for mtime, size, uid, path, key in files
+    stale = [(row, uid, path, size) for row, (mtime, size, uid, path, key) in enumerate(files)
              if (cache.get(uid) or {}).get("key") != key or not os.path.exists(turns_path(uid))
              or "paths" in cache[uid] and cache[uid]["paths"] != len(project_paths(cache))]
     return cache, stale
@@ -963,12 +963,12 @@ def index_entries(files):
         lock = open(LOCK, "w")
         fcntl.flock(lock, fcntl.LOCK_EX)
         cache, stale = load_cache(files)
-    parsed = parse_jobs([(uid, path) for uid, path, _ in stale], sum(size for _, _, size in stale))
-    reparse = {uid for uid, _, _ in stale}
+    parsed = parse_jobs([(uid, path) for _, uid, path, _ in stale], sum(size for _, _, _, size in stale))
+    reparse = {row for row, _, _, _ in stale}
     fresh = {}
-    for mtime, size, uid, path, key in files:
+    for row, (mtime, size, uid, path, key) in enumerate(files):
         entry = cache.get(uid)
-        if uid in reparse:
+        if row in reparse:
             result = next(parsed)
             if result is None:
                 continue
