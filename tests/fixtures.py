@@ -651,8 +651,7 @@ def gemini_message(index, who, text, call=None):
 
 
 def write_gemini(home, index, spec):
-    cwd = os.path.join(home, "code", spec["project"])
-    os.makedirs(cwd, exist_ok=True)
+    cwd = code_dir(home, spec["project"])
     digest = hashlib.sha256(cwd.encode()).hexdigest()
     chats = os.path.join(home, ".gemini", "tmp", spec.get("slug") or digest, "chats")
     os.makedirs(chats, exist_ok=True)
@@ -715,8 +714,7 @@ def qwen_record(kind, sid, cwd, branch, parts, sidechain=False):
 
 
 def write_qwen(home, index, spec):
-    cwd = os.path.join(home, "code", spec["project"])
-    os.makedirs(cwd, exist_ok=True)
+    cwd = code_dir(home, spec["project"])
     sid = session_id(300 + index)
     chats = os.path.join(home, ".qwen", "projects", cwd.replace("/", "-"), "chats")
     os.makedirs(chats, exist_ok=True)
@@ -736,12 +734,7 @@ def write_qwen(home, index, spec):
                                      [{"functionResponse": {"name": name, "response": {"output": "qwentoolnoise"}}}]))
     if spec.get("sidechain"):
         lines.append(qwen_record("user", sid, cwd, branch, [{"text": "qwendelegate audit the rotation"}], True))
-    path = os.path.join(chats, sid + ".jsonl")
-    with open(path, "w") as fh:
-        for line in lines:
-            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
-    when = time.time() - spec["age"]
-    os.utime(path, (when, when))
+    write_jsonl(os.path.join(chats, sid + ".jsonl"), lines, spec["age"])
     return sid, cwd
 
 
@@ -751,8 +744,7 @@ def build_qwen(home):
 
 
 def write_kimi(home, index, spec):
-    cwd = os.path.join(home, "code", spec["project"])
-    os.makedirs(cwd, exist_ok=True)
+    cwd = code_dir(home, spec["project"])
     sid = session_id(400 + index)
     session = os.path.join(home, ".kimi", "sessions", hashlib.md5(cwd.encode()).hexdigest(), sid)
     os.makedirs(session, exist_ok=True)
@@ -777,15 +769,10 @@ def write_kimi(home, index, spec):
         lines.append({"role": "_checkpoint", "id": 1})
     if spec.get("noise"):
         lines.append({"role": "user", "content": [{"type": "text", "text": "<system>CHECKPOINT 1 kiminoise</system>"}]})
-    path = os.path.join(session, "context.jsonl")
-    with open(path, "w") as fh:
-        for line in lines:
-            fh.write(json.dumps(line) + "\n")
     if spec.get("wire"):
         with open(os.path.join(session, "wire.jsonl"), "w") as fh:
             fh.write(json.dumps({"type": "metadata", "protocol_version": "1.1", "note": "kimiwirenoise"}) + "\n")
-    when = time.time() - spec["age"]
-    os.utime(path, (when, when))
+    write_jsonl(os.path.join(session, "context.jsonl"), lines, spec["age"])
     return sid, cwd
 
 

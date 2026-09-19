@@ -634,7 +634,7 @@ def codex_tests():
 
 
 def agent_only(t, label):
-    for _ in range(8):
+    for _ in range(10):
         if label in t.text():
             return True
         t.send("\x01")
@@ -643,20 +643,6 @@ def agent_only(t, label):
 
 def dry_resume(sb, cwd, uid):
     env = dict(sb.env(), TRANSCRIPTS_DRY_RUN="1")
-    return subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, uid],
-                          env=env, capture_output=True, text=True, cwd=env["HOME"]).stdout
-
-
-def cycle_agent(t, name):
-    for _ in range(10):
-        if f"{name} only" in t.text():
-            return True
-        t.send("\x01")
-    return False
-
-
-def resume_plan(sb, uid, cwd, **extra):
-    env = dict(sb.env(), TRANSCRIPTS_DRY_RUN="1", **extra)
     done = subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, uid],
                           env=env, capture_output=True, text=True, cwd=env["HOME"])
     return done.stdout.strip() or done.stderr.strip()
@@ -859,20 +845,20 @@ def gemini_tests():
           and "0/" not in t.text().split("\n")[2], t.text().split("\n")[2])
     t.send("\t\t")
     t.send("\x15")
-    check("ctrl-a narrows to gemini", cycle_agent(t, "gemini"))
+    check("ctrl-a narrows to gemini", agent_only(t, "gemini only"))
     check("no other agent is left in the list", "claude  ·" not in t.text()
           and "codex  ·" not in t.text(), t.text())
     t.send("\x1b")
     t.close()
 
     sid, cwd = harness.fixtures.MADE["gemini"][0]
-    plan = resume_plan(sb, "gemini:" + sid, cwd)
+    plan = dry_resume(sb, cwd, "gemini:" + sid)
     check("an idle gemini session opens a tab with gemini --resume",
           plan.startswith("tab gemini:") and f"gemini --resume {sid}" in plan, plan)
     arm_skip_permissions(sb)
-    check("skip-permissions becomes --yolo for gemini", "--yolo" in resume_plan(sb, "gemini:" + sid, cwd))
+    check("skip-permissions becomes --yolo for gemini", "--yolo" in dry_resume(sb, cwd, "gemini:" + sid))
     check("claude flags never reach gemini",
-          "--chrome" not in resume_plan(sb, "gemini:" + sid, cwd))
+          "--chrome" not in dry_resume(sb, cwd, "gemini:" + sid))
 
     sid, cwd = harness.fixtures.MADE["gemini"][-1]
     shutil.rmtree(os.path.join(sb.root, ".cache", "herdr-transcripts"), ignore_errors=True)
@@ -910,18 +896,18 @@ def qwen_tests():
           and "0/" not in t.text().split("\n")[2], t.text().split("\n")[2])
     t.send("\t\t")
     t.send("\x15")
-    check("ctrl-a narrows to qwen", cycle_agent(t, "qwen"))
+    check("ctrl-a narrows to qwen", agent_only(t, "qwen only"))
     check("no other agent is left in the list", "claude  ·" not in t.text()
           and "codex  ·" not in t.text(), t.text())
     t.send("\x1b")
     t.close()
 
     sid, cwd = harness.fixtures.MADE["qwen"][0]
-    plan = resume_plan(sb, "qwen:" + sid, cwd)
+    plan = dry_resume(sb, cwd, "qwen:" + sid)
     check("an idle qwen session opens a tab with qwen --resume",
           plan.startswith("tab qwen:") and f"qwen --resume {sid}" in plan, plan)
     arm_skip_permissions(sb)
-    check("skip-permissions becomes --yolo for qwen", "--yolo" in resume_plan(sb, "qwen:" + sid, cwd))
+    check("skip-permissions becomes --yolo for qwen", "--yolo" in dry_resume(sb, cwd, "qwen:" + sid))
 
 
 def kimi_tests():
@@ -956,18 +942,18 @@ def kimi_tests():
           and "0/" not in t.text().split("\n")[2], t.text().split("\n")[2])
     t.send("\t\t")
     t.send("\x15")
-    check("ctrl-a narrows to kimi", cycle_agent(t, "kimi"))
+    check("ctrl-a narrows to kimi", agent_only(t, "kimi only"))
     check("no other agent is left in the list", "claude  ·" not in t.text()
           and "codex  ·" not in t.text(), t.text())
     t.send("\x1b")
     t.close()
 
     sid, cwd = harness.fixtures.MADE["kimi"][0]
-    plan = resume_plan(sb, "kimi:" + sid, cwd)
+    plan = dry_resume(sb, cwd, "kimi:" + sid)
     check("an idle kimi session opens a tab with kimi --session",
           plan.startswith("tab kimi:") and f"kimi --session {sid}" in plan, plan)
     arm_skip_permissions(sb)
-    check("skip-permissions becomes --yolo for kimi", "--yolo" in resume_plan(sb, "kimi:" + sid, cwd))
+    check("skip-permissions becomes --yolo for kimi", "--yolo" in dry_resume(sb, cwd, "kimi:" + sid))
 
 
 def main():

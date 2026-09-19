@@ -732,9 +732,7 @@ def parse_gemini(path):
         for call in message.get("toolCalls") or []:
             if not isinstance(call, dict) or total >= CAP_TEXT:
                 continue
-            given = call.get("args")
-            fields = given.values() if isinstance(given, dict) else []
-            text = " ".join([str(call.get("name") or ""), *(v for v in fields if isinstance(v, str))]).strip()
+            text = tool_args(call.get("args"), str(call.get("name") or "")).strip()
             if text:
                 tools.append(normalize(text, 300))
                 total += min(len(text), 300)
@@ -746,10 +744,6 @@ def parse_gemini(path):
             (prompts if kind == "user" else replies).append(normalize(text, 1000))
             total += min(len(text), 1000)
     return hashed_entry(meta.get("summary") or "", cwd, "", prompts, replies, tools, turns)
-
-
-def qwen_sid(path):
-    return os.path.basename(path)[:-len(".jsonl")]
 
 
 def parse_qwen(path):
@@ -781,9 +775,7 @@ def parse_qwen(path):
                     continue
                 call = part.get("functionCall")
                 if isinstance(call, dict):
-                    given = call.get("args")
-                    fields = given.values() if isinstance(given, dict) else []
-                    text = " ".join([str(call.get("name") or ""), *(v for v in fields if isinstance(v, str))]).strip()
+                    text = tool_args(call.get("args"), str(call.get("name") or "")).strip()
                     if text and total < CAP_TEXT:
                         tools.append(normalize(text, 300))
                         total += min(len(text), 300)
@@ -871,14 +863,17 @@ PROVIDERS = {
                 "sid": copilot_sid, "parse": parse_copilot, "resume": ("copilot", "--resume={sid}"),
                 "flags": {"skip_permissions": ("--allow-all-tools",)},
                 "install": "npm install -g @github/copilot"},
-                  "gemini": {"root": GEMINI_CHATS, "files": os.path.join(GEMINI_CHATS, "*", "chats", "*.json*"),
-               "sid": gemini_sid, "parse": parse_gemini, "resume": ("gemini", "--resume", "{sid}"), "flags": {"skip_permissions": ("--yolo",)},
+    "gemini": {"root": GEMINI_CHATS, "files": os.path.join(GEMINI_CHATS, "*", "chats", "*.json*"),
+               "sid": gemini_sid, "parse": parse_gemini, "resume": ("gemini", "--resume", "{sid}"),
+               "flags": {"skip_permissions": ("--yolo",)},
                "install": "npm install -g @google/gemini-cli"},
     "qwen": {"root": QWEN_PROJECTS, "files": os.path.join(QWEN_PROJECTS, "*", "chats", "*.jsonl"),
-             "sid": qwen_sid, "parse": parse_qwen, "resume": ("qwen", "--resume", "{sid}"), "flags": {"skip_permissions": ("--yolo",)},
+             "sid": jsonl_sid, "parse": parse_qwen, "resume": ("qwen", "--resume", "{sid}"),
+             "flags": {"skip_permissions": ("--yolo",)},
              "install": "npm install -g @qwen-code/qwen-code"},
     "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
-             "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"), "flags": {"skip_permissions": ("--yolo",)},
+             "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"),
+             "flags": {"skip_permissions": ("--yolo",)},
              "install": "uv tool install kimi-cli"},
 }
 
