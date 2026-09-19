@@ -108,6 +108,15 @@ def unit_tests():
     os.environ["PATH"] = path
     check("no git on PATH degrades to the alive and gone split",
           "1 gone" in line and "unexplained" not in line, line)
+    capped = [f"capped{n}.py" for n in range(vb.CAP_FILES + 1)]
+    for name in capped[:3]:
+        open(os.path.join(scratch, name), "w").close()
+    line = vb.touched_line(scratch, capped)
+    check("a session that hit the file cap reports the total as a floor",
+          f"{vb.CAP_FILES}+ files touched" in line and "3 still there" in line, line)
+    entry, _ = vb.make_entry("", scratch, "", [], [], [], [], [f"many{n}.py" for n in range(400)])
+    check("the entry keeps one path past the cap so the preview can tell it was truncated",
+          len(entry["files"]) == vb.CAP_FILES + 1, len(entry["files"]))
 
 
 def picker_tests():

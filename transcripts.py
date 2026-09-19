@@ -44,7 +44,7 @@ CAP_TEXT = 120000
 CAP_TURNS = 200
 CAP_TURN_CHARS = 1000
 CAP_FILES = 100
-INDEX_VERSION = "v7"
+INDEX_VERSION = "v8"
 POOL_MIN_BYTES = 24 << 20
 
 R = "\033[0m"
@@ -414,7 +414,7 @@ def make_entry(title, cwd, branch, prompts, replies, tools, turns, files=()):
     entry = {"title": normalize(title, 200), "cwd": cwd, "branch": normalize(branch, 80),
              "prompts": " | ".join(prompts), "replies": " | ".join(replies), "tools": " | ".join(tools),
              "opening_prompt": next((text for _, text in turns if text != "[image]"), ""),
-             "files": list(dict.fromkeys(files))[:CAP_FILES]}
+             "files": list(dict.fromkeys(files))[:CAP_FILES + 1]}
     return entry, list(turns)
 
 
@@ -1069,34 +1069,40 @@ def git_deletions(cwd, paths):
                               capture_output=True, text=True, timeout=2)
     except Exception:
         return None
-    return {name for name in done.stdout.split("\0") if name} if not done.returncode else None
+    return None if done.returncode else {name for name in done.stdout.split("\0") if name}
 
 
 def touched_line(cwd, given):
     cwd = cwd.rstrip("/")
     if not cwd:
         return ""
+    capped = len(given) > CAP_FILES
     alive, gone = [], []
-    for raw in given:
+    for raw in given[:CAP_FILES]:
         path = os.path.normpath(os.path.join(cwd, raw))
-        if not path.startswith(cwd + os.sep) or os.path.isdir(path):
+        if not path.startswith(cwd + os.sep):
             continue
-        (alive if os.path.exists(path) else gone).append(os.path.relpath(path, cwd))
-    if not alive and not gone:
+        rel = os.path.relpath(path, cwd)
+        if os.path.isfile(path):
+            alive.append(rel)
+        elif not os.path.exists(path):
+            gone.append(rel)
+    total = len(alive) + len(gone)
+    if not total:
         return ""
-    parts = [plural(len(alive) + len(gone), "file") + " touched", f"{len(alive)} still there"]
-    deleted = set()
+    counted = f"{total}+ files touched" if capped else plural(total, "file") + " touched"
+    parts = [counted, f"{len(alive)} still there"]
     if gone:
         deleted = git_deletions(cwd, gone) if os.path.isdir(cwd) else None
-    if deleted is None:
-        parts.append(f"{len(gone)} gone")
-    else:
-        superseded = sum(1 for path in gone
-                         if path in deleted or any(name.startswith(path + "/") for name in deleted))
-        if superseded:
-            parts.append(f"{superseded} superseded")
-        if len(gone) > superseded:
-            parts.append(f"{len(gone) - superseded} unexplained")
+        if deleted is None:
+            parts.append(f"{len(gone)} gone")
+        else:
+            superseded = sum(1 for path in gone
+                             if path in deleted or any(name.startswith(path + "/") for name in deleted))
+            if superseded:
+                parts.append(f"{superseded} superseded")
+            if len(gone) > superseded:
+                parts.append(f"{len(gone) - superseded} unexplained")
     return C["dim"] + "  ·  ".join(parts) + R
 
 
