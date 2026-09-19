@@ -203,6 +203,7 @@ def state_tests():
     sb = harness.sandbox("states")
     shutil.rmtree(os.path.join(sb.root, ".claude", "projects"))
     shutil.rmtree(os.path.join(sb.root, ".codex", "sessions"))
+    shutil.rmtree(os.path.join(sb.root, ".factory", "sessions"))
     os.makedirs(os.path.join(sb.root, ".claude", "projects"))
     t = harness.run(sb, cols=90, rows=24)
     t.wait_idle()
@@ -519,7 +520,7 @@ def diagnostics_tests():
                            os.path.join(sb.root, "code", "odd").replace("/", "-"))
     os.makedirs(os.path.join(project, "55555555-5555-4555-8555-555555555555.jsonl"))
 
-    t = harness.run(sb, cols=100, rows=46)
+    t = harness.run(sb, cols=100, rows=54)
     t.wait_idle()
     t.send("\x04")
     screen = t.text()
@@ -535,7 +536,7 @@ def diagnostics_tests():
     with open(index, "w") as fh:
         fh.write("{ not json\n")
     t = harness.Term([harness.PLUGIN + "/transcripts", "overlay", "diagnostics"],
-                     sb.env(), cols=100, rows=46)
+                     sb.env(), cols=100, rows=54)
     t.wait_idle()
     check("a corrupt index is not called missing", "not built yet" not in t.text(), t.text())
     check("a corrupt index says so", "is unreadable" in t.text(), t.text())
@@ -545,7 +546,7 @@ def diagnostics_tests():
         fh.write("#!/bin/sh\necho 'herdr: socket not found' >&2\nexit 1\n")
     os.chmod(sb.herdr, 0o755)
     t = harness.Term([harness.PLUGIN + "/transcripts", "overlay", "diagnostics"],
-                     sb.env(), cols=100, rows=46)
+                     sb.env(), cols=100, rows=54)
     t.wait_idle()
     check("a failing herdr is not shown as healthy", "live agents" not in t.text(), t.text())
     check("a failing herdr reports the reason", "socket not found" in t.text(), t.text())
@@ -626,6 +627,67 @@ def codex_tests():
           not any("--dangerously-skip-permissions" in c or "--chrome" in c for c in sent), str(sent))
 
 
+def agent_only(t, label):
+    for _ in range(8):
+        if label in t.text():
+            return True
+        t.send("\x01")
+    return label in t.text()
+
+
+def dry_resume(sb, cwd, uid):
+    env = dict(sb.env(), TRANSCRIPTS_DRY_RUN="1")
+    return subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, uid],
+                          env=env, capture_output=True, text=True, cwd=env["HOME"]).stdout
+
+
+def arm_skip_permissions(sb):
+    config = os.path.join(sb.root, ".config", "herdr", "plugins", "config", "transcripts", "config.toml")
+    os.makedirs(os.path.dirname(config), exist_ok=True)
+    with open(config, "w") as fh:
+        fh.write("skip_permissions = true\nchrome = true\n")
+
+
+def droid_tests():
+    print("droid")
+    sb = harness.sandbox("droid")
+    sid, cwd = harness.fixtures.DROID_SIDS[0], os.path.join(sb.root, "code", "atlas-web")
+    t = harness.run(sb, cols=110, rows=30)
+    t.wait_idle()
+    check("ctrl-a cycles to droid only", agent_only(t, "droid only"), t.text())
+    screen = t.text()
+    check("a droid session lists under the title from its session start",
+          "Move the droid picker off the deprecated tiles endpoint" in screen, screen)
+    check("droid rows say which tool they belong to", "droid  ·  atlas-web" in screen, screen)
+    check("droid only hides the other agents",
+          "claude  ·" not in screen and "codex  ·" not in screen, screen)
+    check("a droid session that holds nothing but a header stays out of the list",
+          "New Session" not in screen, screen)
+    check("the droid preview labels who spoke", "you ›" in screen and "droid ›" in screen, screen)
+    check("the droid system reminder never reaches the preview",
+          "<system-reminder>" not in screen and "% pwd" not in screen, screen)
+
+    t.send("reminderleak")
+    check("droid system reminders never become prompts",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("toolnoise")
+    check("droid tool results and todo lists are not indexed",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("\x1b")
+    t.close()
+
+    plan = dry_resume(sb, cwd, "droid:" + sid)
+    check("an idle droid session opens a tab with droid --resume",
+          plan.startswith("tab droid:") and f"droid --resume {sid}" in plan, plan)
+    arm_skip_permissions(sb)
+    plan = dry_resume(sb, cwd, "droid:" + sid)
+    check("skip-permissions becomes --auto high for droid", "--auto high" in plan, plan)
+    check("claude flags never reach droid", "--dangerously-skip-permissions" not in plan
+          and "--chrome" not in plan, plan)
+
+
 def main():
     unit_tests()
     codex_tests()
@@ -641,6 +703,7 @@ def main():
     click_tests()
     retention_tests()
     diagnostics_tests()
+    droid_tests()
     print()
     if FAILED:
         print(f"{len(FAILED)} failed:")

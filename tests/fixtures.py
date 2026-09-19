@@ -304,6 +304,55 @@ def build_codex(home):
     return made
 
 
+DROID_SIDS = ("a3f1c0d2-1f4e-4b77-9c01-5d2e8ab41c60", "b7e4d9aa-2c85-4f13-8e6a-0c9b7d3f2a14")
+DROID_REMINDER = ("<system-reminder>\n\nUser system info (linux 6.17.7-2-cachyos)\nToday's date: 2026-09-17\n\n"
+                  "# The commands below were executed at the start of all sessions.\n\n"
+                  "% pwd\n{cwd}\n\n% ls\nREADME.md\nsrc\nreminderleak\n</system-reminder>")
+DROID_TITLE = "Move the droid picker off the deprecated tiles endpoint"
+
+
+def droid_message(role, content):
+    return {"type": "message", "id": DROID_SIDS[0], "timestamp": "2026-09-17T10:00:00.000Z",
+            "message": {"role": role, "content": content}}
+
+
+def write_droid(path, lines, age):
+    with open(path, "w") as fh:
+        for line in lines:
+            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
+    when = time.time() - age
+    os.utime(path, (when, when))
+
+
+def build_droid(home):
+    root = os.path.join(home, ".factory", "sessions")
+    shutil.rmtree(os.path.join(home, ".factory"), ignore_errors=True)
+    os.makedirs(root, exist_ok=True)
+    cwd = os.path.join(home, "code", "atlas-web")
+    os.makedirs(cwd, exist_ok=True)
+    lines = [{"type": "session_start", "id": DROID_SIDS[0], "title": DROID_TITLE,
+              "owner": "rafa", "version": 2},
+             droid_message("user", [{"type": "text", "text": DROID_REMINDER.format(cwd=cwd)},
+                                    {"type": "text", "text": DROID_TITLE}]),
+             droid_message("assistant", [{"type": "thinking", "thinking": "reminderleak about the endpoint"},
+                                         {"type": "text", "text": "The old endpoint answers 410 now, so the"
+                                                                  " picker reads the tiles service instead."},
+                                         {"type": "tool_use", "name": "Edit",
+                                          "input": {"file_path": "src/picker/tiles.py"}}]),
+             droid_message("user", [{"type": "tool_result", "tool_use_id": "toolu_1",
+                                     "content": "toolnoise 12 tiles"}]),
+             {"type": "todo_state", "id": DROID_SIDS[0], "timestamp": "2026-09-17T10:01:00.000Z",
+              "todos": {"todos": [{"id": "1", "content": "toolnoise the cache", "status": "pending"}]}},
+             droid_message("user", [{"type": "text", "text": "Does it still work when the cache is cold?"}]),
+             droid_message("assistant", [{"type": "text", "text": "Yes. A cold cache falls through to the"
+                                                                 " service and fills itself on the way back."}])]
+    write_droid(os.path.join(root, DROID_SIDS[0] + ".jsonl"), lines, 70 * MINUTE)
+    write_droid(os.path.join(root, DROID_SIDS[1] + ".jsonl"),
+                [{"type": "session_start", "id": DROID_SIDS[1], "title": "New Session", "owner": "rafa"}],
+                2 * HOUR)
+    return [(DROID_SIDS[0], cwd), (DROID_SIDS[1], "")]
+
+
 def session_id(n):
     rnd = random.Random(n)
     hexes = "%08x-%04x-4%03x-%04x-%012x" % (
@@ -378,6 +427,7 @@ def build(home):
         made.append(write_session(root, home, index, spec))
     with open(os.path.join(home, ".claude", "settings.json"), "w") as fh:
         json.dump({"cleanupPeriodDays": 3650}, fh, indent=2)
+    build_droid(home)
     return made
 
 

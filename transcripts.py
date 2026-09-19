@@ -291,6 +291,7 @@ METADATA = ("<system-reminder>", "<command-name>", "<command-message>", "<comman
             "<bash-stderr>", "<ide_", "<caveat>", "<task-notification>", "Base directory for this skill:",
             "(Re-invocation of ")
 MIDTURN = re.compile(r"new message while you were working:\n(.+?)\n\nThis is how Claude Code", re.S)
+PWD_LINE = re.compile(r"^% pwd\n(.+)$", re.M)
 
 
 def normalize(text, cap):
@@ -298,8 +299,8 @@ def normalize(text, cap):
     return " ".join(clean.split())[:cap]
 
 
-def parse_transcript(path):
-    title = cwd = branch = ""
+def parse_transcript(path, agent="claude", title=""):
+    cwd = branch = ""
     prompts, replies, tools = [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
@@ -361,11 +362,14 @@ def parse_transcript(path):
                 if kind == "text":
                     text = (part.get("text") or "").strip()
                     if text.startswith("<system-reminder>"):
+                        if not cwd:
+                            found = PWD_LINE.search(text)
+                            cwd = found.group(1).strip() if found else ""
                         m = MIDTURN.search(text)
                         text = m.group(1).strip() if m else ""
                     if not text or text.startswith(METADATA) or text.startswith("[Request interrupted"):
                         continue
-                    turns.append(["you" if is_user else "claude", normalize(text, CAP_TURN_CHARS)])
+                    turns.append(["you" if is_user else agent, normalize(text, CAP_TURN_CHARS)])
                     if total < CAP_TEXT:
                         (prompts if is_user else replies).append(normalize(text, 1000))
                         total += min(len(text), 1000)
@@ -495,12 +499,35 @@ def codex_resume(sid, settings):
     return ["codex", "resume", sid, *(["--yolo"] if settings["skip_permissions"] else [])]
 
 
+DROID_SESSIONS = os.path.join(HOME, ".factory", "sessions")
+
+
+def droid_sid(path):
+    return os.path.basename(path)[:-len(".jsonl")]
+
+
+def parse_droid(path):
+    try:
+        with open(path, "rb") as fh:
+            title = json.loads(fh.readline()).get("title") or ""
+    except Exception:
+        title = ""
+    return parse_transcript(path, "droid", title)
+
+
+def droid_resume(sid, settings):
+    return ["droid", "--resume", sid, *(["--auto", "high"] if settings["skip_permissions"] else [])]
+
+
 PROVIDERS = {
     "claude": {"root": PROJECTS, "files": os.path.join(PROJECTS, "*", "*.jsonl"), "sid": claude_sid,
                "parse": parse_transcript, "resume": claude_resume,
                "install": "npm install -g @anthropic-ai/claude-code"},
     "codex": {"root": CODEX_SESSIONS, "files": os.path.join(CODEX_SESSIONS, "**", "*.jsonl"), "sid": codex_sid,
               "parse": parse_codex, "resume": codex_resume, "install": "npm install -g @openai/codex"},
+    "droid": {"root": DROID_SESSIONS, "files": os.path.join(DROID_SESSIONS, "*.jsonl"), "sid": droid_sid,
+              "parse": parse_droid, "resume": droid_resume,
+              "install": "curl -fsSL https://app.factory.ai/cli | sh"},
 }
 
 
