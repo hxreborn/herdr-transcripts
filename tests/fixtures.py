@@ -211,6 +211,31 @@ CODEX = [
     },
 ]
 
+OPENCODE = [
+    {
+        "title": "Stop the uploader retrying a rejected chunk", "project": "infra", "age": 25 * MINUTE,
+        "turns": [
+            ("you", "the uploader keeps retrying when the bucket rejects a chunk, cap it"),
+            ("opencode", "Capped it at four attempts with backoff, and the fifth failure raises so"
+                         " the job stops instead of spinning."),
+        ],
+        "tools": [("write", "src/uploader_chunks.py")],
+        "injected": [("<file>\n00001| syntheticnoise\n</file>", True),
+                     ("<system-reminder>\nremindernoise\n</system-reminder>", False)],
+    },
+    {
+        "title": "Trace the dropped websocket frames", "project": "atlas-web", "age": 35 * MINUTE,
+        "parent": 0,
+        "turns": [("you", "childprompt: why does the reader drop frames"),
+                  ("opencode", "The buffer overruns whenever the reader lags behind the socket.")],
+        "tools": [],
+    },
+    {
+        "title": "", "project": "notebook", "age": 50 * MINUTE,
+        "turns": [("opencode", None)], "tools": [("read", "notebook/scratch.md")],
+    },
+]
+
 ENVIRONMENT = "<environment_context>\n  <cwd>{cwd}</cwd>\n  <approval_policy>on-request</approval_policy>\n</environment_context>"
 INSTRUCTIONS = "# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\nKeep changes small.\n</INSTRUCTIONS>"
 
@@ -299,6 +324,68 @@ def build_codex(home):
     db = sqlite3.connect(os.path.join(root, "state_5.sqlite"))
     db.execute("create table threads (id text primary key, name text, git_branch text)")
     db.execute("insert into threads values (?, ?, ?)", (made[0][0], CODEX[0]["title"], "perf/exporter-retry"))
+    db.commit()
+    db.close()
+    return made
+
+
+def opencode_sid(index):
+    return "ses_" + session_id(200 + index).replace("-", "")
+
+
+def write_opencode(db, home, index, spec):
+    cwd = os.path.join(home, "code", spec["project"])
+    os.makedirs(cwd, exist_ok=True)
+    sid = opencode_sid(index)
+    stamp = int((time.time() - spec["age"]) * 1000)
+    parent = None if spec.get("parent") is None else opencode_sid(spec["parent"])
+    db.execute("insert into session values (?,?,?,?,?,?,?,?,?)",
+               (sid, "prj_1", parent, spec["project"], cwd, spec["title"], "1.2.0", stamp, stamp))
+    tools = list(spec.get("tools", []))
+    for clock, (who, text) in enumerate(spec["turns"]):
+        mid = f"msg_{sid}_{clock}"
+        role = "user" if who == "you" else "assistant"
+        message = {"role": role, "time": {"created": stamp}}
+        if role == "assistant":
+            message["path"] = {"cwd": cwd, "root": cwd}
+        db.execute("insert into message values (?,?,?,?,?)",
+                   (mid, sid, clock, clock, json.dumps(message, separators=(",", ":"))))
+        parts = [] if text is None else [{"type": "text", "text": text}]
+        if role == "user":
+            for injected, synthetic in spec.get("injected", []):
+                part = {"type": "text", "text": injected}
+                if synthetic:
+                    part["synthetic"] = True
+                parts.append(part)
+        else:
+            parts = [{"type": "step-start"}, {"type": "reasoning", "text": "reasoningnoise"}] + parts
+            if tools:
+                name, arg = tools.pop(0)
+                key = "filePath" if name in ("read", "write") else "command"
+                parts.append({"type": "tool", "callID": "tool_1", "tool": name,
+                              "state": {"status": "completed",
+                                        "input": {key: arg, "content": "toolnoise in the content key"},
+                                        "output": "toolnoise: 3 passed"}})
+                parts.append({"type": "step-finish", "reason": "tool-calls"})
+        for n, part in enumerate(parts):
+            db.execute("insert into part values (?,?,?,?,?,?)",
+                       (f"prt_{mid}_{n}", mid, sid, n, n, json.dumps(part, separators=(",", ":"))))
+    return sid, cwd
+
+
+def build_opencode(home):
+    root = os.path.join(home, ".local", "share", "opencode")
+    shutil.rmtree(root, ignore_errors=True)
+    os.makedirs(root, exist_ok=True)
+    import sqlite3
+    db = sqlite3.connect(os.path.join(root, "opencode.db"))
+    db.execute("create table session (id text primary key, project_id text, parent_id text, slug text,"
+               " directory text, title text, version text, time_created integer, time_updated integer)")
+    db.execute("create table message (id text primary key, session_id text, time_created integer,"
+               " time_updated integer, data text)")
+    db.execute("create table part (id text primary key, message_id text, session_id text,"
+               " time_created integer, time_updated integer, data text)")
+    made = [write_opencode(db, home, index, spec) for index, spec in enumerate(OPENCODE)]
     db.commit()
     db.close()
     return made

@@ -1,6 +1,6 @@
 # herdr-transcripts
 
-Search the transcripts of your Claude Code and Codex sessions, in a
+Search the transcripts of your Claude Code, Codex and OpenCode sessions, in a
 [Herdr](https://herdr.dev) popup. Search by title, prompt, reply or tool call.
 
 [![Find a session by a word you remember, reorder, switch to dates, narrow with a second word, and resume it in a new Herdr tab](assets/overview.gif)](assets/overview.mp4)
@@ -16,10 +16,11 @@ Search the transcripts of your Claude Code and Codex sessions, in a
 
 ## Supported agents
 
-| Agent                                                         | Transcripts          | Resume            | `Ctrl+X`                         | `Ctrl+B`   |
-| ------------------------------------------------------------- | -------------------- | ----------------- | -------------------------------- | ---------- |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects` | `claude --resume` | `--dangerously-skip-permissions` | `--chrome` |
-| [Codex](https://github.com/openai/codex)                      | `~/.codex/sessions`  | `codex resume`    | `--yolo`                         |            |
+| Agent                                                         | Transcripts               | Resume               | `Ctrl+X`                         | `Ctrl+B`   |
+| ------------------------------------------------------------- | ------------------------- | -------------------- | -------------------------------- | ---------- |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects`      | `claude --resume`    | `--dangerously-skip-permissions` | `--chrome` |
+| [Codex](https://github.com/openai/codex)                      | `~/.codex/sessions`       | `codex resume`       | `--yolo`                         |            |
+| [OpenCode](https://opencode.ai)                               | `~/.local/share/opencode` | `opencode --session` |                                  |            |
 
 ## Screenshots
 

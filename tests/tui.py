@@ -203,11 +203,13 @@ def state_tests():
     sb = harness.sandbox("states")
     shutil.rmtree(os.path.join(sb.root, ".claude", "projects"))
     shutil.rmtree(os.path.join(sb.root, ".codex", "sessions"))
+    shutil.rmtree(os.path.join(sb.root, ".local", "share", "opencode"))
     os.makedirs(os.path.join(sb.root, ".claude", "projects"))
     t = harness.run(sb, cols=90, rows=24)
     t.wait_idle()
     check("empty state explains where transcripts live", "No sessions yet" in t.text()
-          and ".claude/projects" in t.text() and ".codex/sessions" in t.text())
+          and ".claude/projects" in t.text() and ".codex/sessions" in t.text()
+          and ".local/share/opencode" in t.text())
     t.send("x")
     check("empty state closes on a keypress", t.wait(timeout=5) is not None)
     t.close()
@@ -519,7 +521,7 @@ def diagnostics_tests():
                            os.path.join(sb.root, "code", "odd").replace("/", "-"))
     os.makedirs(os.path.join(project, "55555555-5555-4555-8555-555555555555.jsonl"))
 
-    t = harness.run(sb, cols=100, rows=46)
+    t = harness.run(sb, cols=100, rows=52)
     t.wait_idle()
     t.send("\x04")
     screen = t.text()
@@ -535,7 +537,7 @@ def diagnostics_tests():
     with open(index, "w") as fh:
         fh.write("{ not json\n")
     t = harness.Term([harness.PLUGIN + "/transcripts", "overlay", "diagnostics"],
-                     sb.env(), cols=100, rows=46)
+                     sb.env(), cols=100, rows=52)
     t.wait_idle()
     check("a corrupt index is not called missing", "not built yet" not in t.text(), t.text())
     check("a corrupt index says so", "is unreadable" in t.text(), t.text())
@@ -545,7 +547,7 @@ def diagnostics_tests():
         fh.write("#!/bin/sh\necho 'herdr: socket not found' >&2\nexit 1\n")
     os.chmod(sb.herdr, 0o755)
     t = harness.Term([harness.PLUGIN + "/transcripts", "overlay", "diagnostics"],
-                     sb.env(), cols=100, rows=46)
+                     sb.env(), cols=100, rows=52)
     t.wait_idle()
     check("a failing herdr is not shown as healthy", "live agents" not in t.text(), t.text())
     check("a failing herdr reports the reason", "socket not found" in t.text(), t.text())
@@ -626,9 +628,81 @@ def codex_tests():
           not any("--dangerously-skip-permissions" in c or "--chrome" in c for c in sent), str(sent))
 
 
+def opencode_tests():
+    print("opencode")
+    sb = harness.sandbox("opencode")
+    t = harness.run(sb, cols=110, rows=30)
+    t.wait_idle()
+    screen = t.text()
+    check("an opencode session lists under its title",
+          "Stop the uploader retrying a rejected chunk" in screen)
+    check("opencode rows say which tool they belong to", "opencode  ·  infra" in screen)
+    t.send("bucket")
+    screen = t.text()
+    check("an opencode prompt is searchable and the preview labels who asked",
+          "Stop the uploader retrying a rejected chunk" in screen and "you ›" in screen)
+    t.send("\x15")
+    t.send("spinning")
+    check("the opencode preview labels who answered", "opencode ›" in t.text())
+    t.send("\x15")
+    t.send("syntheticnoise")
+    check("opencode synthetic parts never become prompts",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("remindernoise")
+    check("opencode system reminders never become prompts",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("reasoningnoise")
+    check("opencode reasoning is not indexed", "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("toolnoise")
+    check("opencode tool output is not indexed", "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("uploader_chunks")
+    check("opencode tool calls stay out of the conversation scope",
+          "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\t\t\t\t")
+    check("tools scope finds the opencode tool call",
+          "Stop the uploader retrying a rejected chunk" in t.text()
+          and "0/" not in t.text().split("\n")[2], t.text().split("\n")[2])
+    t.send("\x15")
+    t.send("\t\t")
+
+    t.send("\x01\x01\x01")
+    screen = t.text()
+    check("ctrl-a narrows to opencode", "opencode only" in screen)
+    check("the opencode filter drops the other agents",
+          "Stop the uploader retrying a rejected chunk" in screen
+          and "Retry the checkout webhook" not in screen
+          and "Tighten the exporter retry budget" not in screen)
+    check("a child opencode session is never listed", "Trace the dropped websocket frames" not in screen)
+    check("an opencode session without a title or a prompt stays out", "notebook" not in screen)
+    t.send("\x1b")
+    t.close()
+
+    sid, cwd = sb.opencode[0]
+    env = sb.env()
+    dry = dict(env, TRANSCRIPTS_DRY_RUN="1")
+    done = subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, "opencode:" + sid],
+                          env=dry, capture_output=True, text=True, cwd=env["HOME"])
+    check("an idle opencode session opens a tab with opencode --session",
+          done.stdout.strip() == f"tab opencode:{sid} {cwd} opencode --session {sid}", done.stdout)
+
+    config = os.path.join(sb.root, ".config", "herdr", "plugins", "config", "transcripts", "config.toml")
+    os.makedirs(os.path.dirname(config), exist_ok=True)
+    with open(config, "w") as fh:
+        fh.write("skip_permissions = true\nchrome = true\n")
+    done = subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, "opencode:" + sid],
+                          env=dry, capture_output=True, text=True, cwd=env["HOME"])
+    check("resume flags never reach opencode",
+          done.stdout.strip().endswith(f"opencode --session {sid}"), done.stdout)
+
+
 def main():
     unit_tests()
     codex_tests()
+    opencode_tests()
     picker_tests()
     layout_tests()
     state_tests()

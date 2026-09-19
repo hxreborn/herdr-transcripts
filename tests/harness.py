@@ -56,6 +56,7 @@ class Sandbox:
         os.makedirs(root)
         self.sessions = fixtures.build(root)
         self.codex = fixtures.build_codex(root)
+        self.opencode = fixtures.build_opencode(root)
         os.makedirs(os.path.join(root, ".config", "herdr"), exist_ok=True)
         with open(os.path.join(root, ".config", "herdr", "config.toml"), "w") as fh:
             fh.write(THEME)
@@ -64,7 +65,7 @@ class Sandbox:
         with open(self.herdr, "w") as fh:
             fh.write(FAKE_HERDR)
         os.chmod(self.herdr, 0o755)
-        for provider in ("claude", "codex"):
+        for provider in ("claude", "codex", "opencode"):
             stub = os.path.join(root, "bin", provider)
             with open(stub, "w") as fh:
                 fh.write("#!/bin/sh\nexit 0\n")

@@ -23,6 +23,7 @@ SETTINGS = os.path.join(HOME, ".claude", "settings.json")
 CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")
 CODEX_SESSIONS = os.path.join(CODEX_HOME, "sessions")
 CODEX_NAMES = os.path.join(CODEX_HOME, "session_index.jsonl")
+OPENCODE_HOME = os.path.join(HOME, ".local", "share", "opencode")
 CACHE_DIR = os.path.join(HOME, ".cache", "herdr-transcripts")
 INDEX = os.path.join(CACHE_DIR, "index.bin")
 SNAPSHOT_FILE = os.path.join(CACHE_DIR, "snapshot.json")
@@ -483,6 +484,66 @@ def parse_codex(path):
     return make_entry(title, cwd, branch, prompts, replies, tools, turns)
 
 
+def opencode_db(path):
+    import sqlite3
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
+def opencode_scan(provider, spec):
+    path = os.path.join(spec["root"], "opencode.db")
+    try:
+        db = opencode_db(path)
+        sizes = dict(db.execute("select session_id, sum(length(cast(data as blob)))"
+                                " from part group by session_id"))
+        sessions = db.execute("select id, time_updated from session where parent_id is null").fetchall()
+        db.close()
+    except Exception:
+        return []
+    found = []
+    for sid, updated in sessions:
+        size = sizes.get(sid) or 0
+        found.append((updated / 1000, size, f"{provider}:{sid}", f"{path}/{sid}",
+                      f"{INDEX_VERSION}:{updated}:{size}"))
+    return found
+
+
+def parse_opencode(path):
+    db_path, _, sid = path.rpartition("/")
+    prompts, replies, tools = [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = 0
+    db = opencode_db(db_path)
+    title, cwd = db.execute("select title, directory from session where id = ?", (sid,)).fetchone()
+    for message, data in db.execute(
+            "select m.data, p.data from part p join message m on m.id = p.message_id"
+            " where p.session_id = ? order by m.time_created, p.time_created, p.id", (sid,)):
+        if data.startswith('{"type":"tool"'):
+            if total >= CAP_TEXT:
+                continue
+            part = json.loads(data)
+            given = (part.get("state") or {}).get("input")
+            fields = given.items() if isinstance(given, dict) else []
+            text = " ".join([part.get("tool") or ""]
+                            + [v for k, v in fields if isinstance(v, str) and k != "content"]).strip()
+            if text:
+                tools.append(normalize(text, 300))
+                total += min(len(text), 300)
+            continue
+        if not data.startswith('{"type":"text"'):
+            continue
+        part = json.loads(data)
+        text = (part.get("text") or "").strip()
+        if part.get("synthetic") or not text or text.startswith(METADATA):
+            continue
+        is_user = '"role":"user"' in message
+        turns.append(["you" if is_user else "opencode", normalize(text, CAP_TURN_CHARS)])
+        if total < CAP_TEXT:
+            (prompts if is_user else replies).append(normalize(text, 1000))
+            total += min(len(text), 1000)
+    db.close()
+    return make_entry(title, cwd, "", prompts, replies, tools, turns)
+
+
 def claude_sid(path):
     return os.path.basename(path)[:-len(".jsonl")]
 
@@ -495,12 +556,18 @@ def codex_resume(sid, settings):
     return ["codex", "resume", sid, *(["--yolo"] if settings["skip_permissions"] else [])]
 
 
+def opencode_resume(sid, settings):
+    return ["opencode", "--session", sid]
+
+
 PROVIDERS = {
     "claude": {"root": PROJECTS, "files": os.path.join(PROJECTS, "*", "*.jsonl"), "sid": claude_sid,
                "parse": parse_transcript, "resume": claude_resume,
                "install": "npm install -g @anthropic-ai/claude-code"},
     "codex": {"root": CODEX_SESSIONS, "files": os.path.join(CODEX_SESSIONS, "**", "*.jsonl"), "sid": codex_sid,
               "parse": parse_codex, "resume": codex_resume, "install": "npm install -g @openai/codex"},
+    "opencode": {"root": OPENCODE_HOME, "scan": opencode_scan, "parse": parse_opencode,
+                 "resume": opencode_resume, "install": "curl -fsSL https://opencode.ai/install | bash"},
 }
 
 
@@ -548,17 +615,21 @@ def read_index():
         return marshal.load(fh)
 
 
+def glob_scan(provider, spec):
+    for path in glob.glob(spec["files"], recursive=True):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if st.st_size:
+            yield (st.st_mtime, st.st_size, f"{provider}:{spec['sid'](path)}", path,
+                   f"{INDEX_VERSION}:{st.st_mtime_ns}:{st.st_size}")
+
+
 def transcript_files():
     found = []
     for provider, spec in PROVIDERS.items():
-        for path in glob.glob(spec["files"], recursive=True):
-            try:
-                st = os.stat(path)
-            except OSError:
-                continue
-            if st.st_size:
-                found.append((st.st_mtime, st.st_size, f"{provider}:{spec['sid'](path)}", path,
-                              f"{INDEX_VERSION}:{st.st_mtime_ns}:{st.st_size}"))
+        found.extend(spec.get("scan", glob_scan)(provider, spec))
     return found
 
 
@@ -1150,7 +1221,7 @@ def resume(cwd, uid):
             f"{C['red']}The session was recorded in{R}",
             f"  {C['dim']}{short_path(cwd)}{R}",
             f"{C['red']}and that directory no longer exists.{R}", "",
-            f"{C['dim']}Claude Code resumes a session in its own directory, so restore or{R}",
+            f"{C['dim']}{command[0]} resumes a session in its own directory, so restore or{R}",
             f"{C['dim']}recreate it — a git worktree usually explains a path that vanished.{R}"])
         return
 
