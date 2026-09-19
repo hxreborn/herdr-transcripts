@@ -34,7 +34,7 @@ TURNS_DIR = os.path.join(CACHE_DIR, "turns")
 CONFIG_DIR = os.environ.get("HERDR_PLUGIN_CONFIG_DIR",
                             os.path.join(HOME, ".config", "herdr", "plugins", "config", "transcripts"))
 CONFIG = os.path.join(CONFIG_DIR, "config.toml")
-HERDR_CONFIG = os.path.join(HOME, ".config", "herdr", "config.toml")
+HERDR_CONFIG = os.environ.get("HERDR_CONFIG_PATH") or os.path.join(HOME, ".config", "herdr", "config.toml")
 SELF = os.path.realpath(__file__)
 Q = shlex.quote(SELF)
 MIN_FZF = (0, 66, 0)
@@ -266,9 +266,10 @@ def snapshot(cached=False):
 def live_agents(cached=False):
     out = {}
     for agent in snapshot(cached).get("agents", []):
-        session = (agent.get("agent_session") or {}).get("value")
-        if agent.get("agent") and session:
-            out[f"{agent['agent']}:{session}"] = agent
+        session = agent.get("agent_session") or {}
+        provider = session.get("agent") or agent.get("agent")
+        if provider and session.get("value"):
+            out[f"{provider}:{session['value']}"] = agent
     return out
 
 
@@ -1500,6 +1501,7 @@ def resume(cwd, uid):
     provider, _, sid = uid.partition(":")
     settings = read_settings()
     command = resume_command(PROVIDERS[provider], sid, settings)
+    SNAPSHOT.clear()
     live = live_agents()
     exe = herdr_bin()
 

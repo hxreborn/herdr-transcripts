@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -66,6 +68,24 @@ def unit_tests():
     check("tabs stripped", "\t" not in vb.normalize("a\tb", 80))
     check("scope nth for the conversation", vb.scope_nth("conversation") == "1,2,3")
     check("scope nth for everything", vb.scope_nth("everything") == "1,2,3,4")
+    vb.SNAPSHOT[:] = [{"agents": [{"agent": "claude", "pane_id": "w1:p1",
+                                   "agent_session": {"agent": "codex", "value": "sid-1"}}]}]
+    check("live agents are keyed by the session's own agent name", list(vb.live_agents()) == ["codex:sid-1"])
+    os.environ["TRANSCRIPTS_DRY_RUN"] = "1"
+    os.environ["HERDR_BIN_PATH"] = os.path.join(harness.PLUGIN, "no-such-herdr")
+    with contextlib.redirect_stdout(io.StringIO()):
+        vb.resume("/", "codex:sid-1")
+    check("resume re-reads the Herdr snapshot instead of the one cached at startup", vb.SNAPSHOT == [{}])
+    del os.environ["TRANSCRIPTS_DRY_RUN"], os.environ["HERDR_BIN_PATH"]
+    custom = os.path.join(harness.PLUGIN, "tests", "custom-herdr.toml")
+    with open(custom, "w") as fh:
+        fh.write('[theme.custom]\naccent = "#010203"\n')
+    env = dict(os.environ, HERDR_CONFIG_PATH=custom)
+    env.pop("HERDR_BIN_PATH", None)
+    header = subprocess.run([harness.PLUGIN + "/transcripts", "header"], env=env,
+                            capture_output=True, text=True).stdout
+    os.remove(custom)
+    check("the theme follows HERDR_CONFIG_PATH", "38;2;1;2;3" in header, header[:200])
 
 
 def picker_tests():
