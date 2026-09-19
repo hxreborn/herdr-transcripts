@@ -630,6 +630,27 @@ def codex_tests():
           not any("--dangerously-skip-permissions" in c or "--chrome" in c for c in sent), str(sent))
 
 
+def agent_only(t, label):
+    for _ in range(8):
+        if label in t.text():
+            return True
+        t.send("\x01")
+    return label in t.text()
+
+
+def dry_resume(sb, cwd, uid):
+    env = dict(sb.env(), TRANSCRIPTS_DRY_RUN="1")
+    return subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, uid],
+                          env=env, capture_output=True, text=True, cwd=env["HOME"]).stdout
+
+
+def arm_skip_permissions(sb):
+    config = os.path.join(sb.root, ".config", "herdr", "plugins", "config", "transcripts", "config.toml")
+    os.makedirs(os.path.dirname(config), exist_ok=True)
+    with open(config, "w") as fh:
+        fh.write("skip_permissions = true\nchrome = true\n")
+
+
 def opencode_tests():
     print("opencode")
     sb = harness.sandbox("opencode")
@@ -671,9 +692,8 @@ def opencode_tests():
     t.send("\x15")
     t.send("\t\t")
 
-    t.send("\x01\x01\x01")
+    check("ctrl-a narrows to opencode", agent_only(t, "opencode only"), t.text())
     screen = t.text()
-    check("ctrl-a narrows to opencode", "opencode only" in screen)
     check("the opencode filter drops the other agents",
           "Stop the uploader retrying a rejected chunk" in screen
           and "Retry the checkout webhook" not in screen
@@ -684,42 +704,14 @@ def opencode_tests():
     t.close()
 
     sid, cwd = sb.opencode[0]
-    env = sb.env()
-    dry = dict(env, TRANSCRIPTS_DRY_RUN="1")
-    done = subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, "opencode:" + sid],
-                          env=dry, capture_output=True, text=True, cwd=env["HOME"])
+    plan = dry_resume(sb, cwd, "opencode:" + sid)
     check("an idle opencode session opens a tab with opencode --session",
-          done.stdout.strip() == f"tab opencode:{sid} {cwd} opencode --session {sid}", done.stdout)
+          plan.strip() == f"tab opencode:{sid} {cwd} opencode --session {sid}", plan)
 
-    config = os.path.join(sb.root, ".config", "herdr", "plugins", "config", "transcripts", "config.toml")
-    os.makedirs(os.path.dirname(config), exist_ok=True)
-    with open(config, "w") as fh:
-        fh.write("skip_permissions = true\nchrome = true\n")
-    done = subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, "opencode:" + sid],
-                          env=dry, capture_output=True, text=True, cwd=env["HOME"])
+    arm_skip_permissions(sb)
+    plan = dry_resume(sb, cwd, "opencode:" + sid)
     check("resume flags never reach opencode",
-          done.stdout.strip().endswith(f"opencode --session {sid}"), done.stdout)
-
-
-def agent_only(t, label):
-    for _ in range(8):
-        if label in t.text():
-            return True
-        t.send("\x01")
-    return label in t.text()
-
-
-def dry_resume(sb, cwd, uid):
-    env = dict(sb.env(), TRANSCRIPTS_DRY_RUN="1")
-    return subprocess.run([harness.PLUGIN + "/transcripts", "resume", cwd, uid],
-                          env=env, capture_output=True, text=True, cwd=env["HOME"]).stdout
-
-
-def arm_skip_permissions(sb):
-    config = os.path.join(sb.root, ".config", "herdr", "plugins", "config", "transcripts", "config.toml")
-    os.makedirs(os.path.dirname(config), exist_ok=True)
-    with open(config, "w") as fh:
-        fh.write("skip_permissions = true\nchrome = true\n")
+          plan.strip().endswith(f"opencode --session {sid}"), plan)
 
 
 def droid_tests():

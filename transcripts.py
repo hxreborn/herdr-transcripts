@@ -24,6 +24,8 @@ CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")
 CODEX_SESSIONS = os.path.join(CODEX_HOME, "sessions")
 CODEX_NAMES = os.path.join(CODEX_HOME, "session_index.jsonl")
 OPENCODE_HOME = os.path.join(HOME, ".local", "share", "opencode")
+DROID_SESSIONS = os.path.join(HOME, ".factory", "sessions")
+COPILOT_STATE = os.path.join(HOME, ".copilot", "session-state")
 CACHE_DIR = os.path.join(HOME, ".cache", "herdr-transcripts")
 INDEX = os.path.join(CACHE_DIR, "index.bin")
 SNAPSHOT_FILE = os.path.join(CACHE_DIR, "snapshot.json")
@@ -300,6 +302,16 @@ def normalize(text, cap):
     return " ".join(clean.split())[:cap]
 
 
+def tool_args(given, *lead):
+    fields = given.items() if isinstance(given, dict) else []
+    return " ".join([*lead, *(v for k, v in fields if isinstance(v, str) and k != "content")])
+
+
+def readonly_db(path):
+    import sqlite3
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
 def parse_transcript(path, agent="claude", title=""):
     cwd = branch = ""
     prompts, replies, tools = [], [], []
@@ -375,9 +387,7 @@ def parse_transcript(path, agent="claude", title=""):
                         (prompts if is_user else replies).append(normalize(text, 1000))
                         total += min(len(text), 1000)
                 elif kind == "tool_use" and total < CAP_TEXT:
-                    given = part.get("input")
-                    fields = given.items() if isinstance(given, dict) else []
-                    text = " ".join(str(v) for k, v in fields if isinstance(v, str) and k != "content")
+                    text = tool_args(part.get("input"))
                     if text:
                         tools.append(normalize(text, 300))
                         total += min(len(text), 300)
@@ -403,8 +413,7 @@ def codex_threads():
         threads = {}
         for db_path in sorted(glob.glob(os.path.join(CODEX_HOME, "state_*.sqlite"))):
             try:
-                import sqlite3
-                db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                db = readonly_db(db_path)
                 for sid, name, branch in db.execute("select id, name, git_branch from threads"):
                     threads[sid] = (name or "", branch or "")
                 db.close()
@@ -488,15 +497,10 @@ def parse_codex(path):
     return make_entry(title, cwd, branch, prompts, replies, tools, turns)
 
 
-def opencode_db(path):
-    import sqlite3
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-
-
 def opencode_scan(provider, spec):
     path = os.path.join(spec["root"], "opencode.db")
     try:
-        db = opencode_db(path)
+        db = readonly_db(path)
         sizes = dict(db.execute("select session_id, sum(length(cast(data as blob)))"
                                 " from part group by session_id"))
         sessions = db.execute("select id, time_updated from session where parent_id is null").fetchall()
@@ -516,7 +520,7 @@ def parse_opencode(path):
     prompts, replies, tools = [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
-    db = opencode_db(db_path)
+    db = readonly_db(db_path)
     title, cwd = db.execute("select title, directory from session where id = ?", (sid,)).fetchone()
     for message, data in db.execute(
             "select m.data, p.data from part p join message m on m.id = p.message_id"
@@ -525,10 +529,7 @@ def parse_opencode(path):
             if total >= CAP_TEXT:
                 continue
             part = json.loads(data)
-            given = (part.get("state") or {}).get("input")
-            fields = given.items() if isinstance(given, dict) else []
-            text = " ".join([part.get("tool") or ""]
-                            + [v for k, v in fields if isinstance(v, str) and k != "content"]).strip()
+            text = tool_args((part.get("state") or {}).get("input"), part.get("tool") or "").strip()
             if text:
                 tools.append(normalize(text, 300))
                 total += min(len(text), 300)
@@ -548,27 +549,13 @@ def parse_opencode(path):
     return make_entry(title, cwd, "", prompts, replies, tools, turns)
 
 
-def claude_sid(path):
+def jsonl_sid(path):
     return os.path.basename(path)[:-len(".jsonl")]
 
 
-def claude_resume(sid, settings):
-    return ["claude", "--resume", sid, *[flag for key, _, flag, _ in FLAGS if settings[key]]]
-
-
-def codex_resume(sid, settings):
-    return ["codex", "resume", sid, *(["--yolo"] if settings["skip_permissions"] else [])]
-
-
-def opencode_resume(sid, settings):
-    return ["opencode", "--session", sid]
-
-
-DROID_SESSIONS = os.path.join(HOME, ".factory", "sessions")
-
-
-def droid_sid(path):
-    return os.path.basename(path)[:-len(".jsonl")]
+def resume_command(spec, sid, settings):
+    flags = [flag for key, given in spec.get("flags", {}).items() if settings[key] for flag in given]
+    return [part.replace("{sid}", sid) for part in spec["resume"]] + flags
 
 
 def parse_droid(path):
@@ -580,11 +567,6 @@ def parse_droid(path):
     return parse_transcript(path, "droid", title)
 
 
-def droid_resume(sid, settings):
-    return ["droid", "--resume", sid, *(["--auto", "high"] if settings["skip_permissions"] else [])]
-
-
-COPILOT_STATE = os.path.join(HOME, ".copilot", "session-state")
 COPILOT_WORKSPACE = re.compile(r"^(cwd|branch|summary):[ \t]*(\S.*?)\s*$", re.M)
 
 
@@ -630,9 +612,7 @@ def parse_copilot(path):
                     (prompts if is_user else replies).append(normalize(text, 1000))
                     total += min(len(text), 1000)
             for call in data.get("toolRequests") or []:
-                given = call.get("arguments") if isinstance(call, dict) else None
-                fields = given.items() if isinstance(given, dict) else []
-                text = " ".join(str(v) for k, v in fields if isinstance(v, str) and k != "content")
+                text = tool_args(call.get("arguments") if isinstance(call, dict) else None)
                 if text and total < CAP_TEXT:
                     tools.append(normalize(text, 300))
                     total += min(len(text), 300)
@@ -641,24 +621,24 @@ def parse_copilot(path):
                       branch or workspace.get("branch", ""), prompts, replies, tools, turns)
 
 
-def copilot_resume(sid, settings):
-    return ["copilot", f"--resume={sid}",
-            *(["--allow-all-tools"] if settings["skip_permissions"] else [])]
-
-
 PROVIDERS = {
-    "claude": {"root": PROJECTS, "files": os.path.join(PROJECTS, "*", "*.jsonl"), "sid": claude_sid,
-               "parse": parse_transcript, "resume": claude_resume,
+    "claude": {"root": PROJECTS, "files": os.path.join(PROJECTS, "*", "*.jsonl"), "sid": jsonl_sid,
+               "parse": parse_transcript, "resume": ("claude", "--resume", "{sid}"),
+               "flags": {key: (flag,) for key, _, flag, _ in FLAGS},
                "install": "npm install -g @anthropic-ai/claude-code"},
     "codex": {"root": CODEX_SESSIONS, "files": os.path.join(CODEX_SESSIONS, "**", "*.jsonl"), "sid": codex_sid,
-              "parse": parse_codex, "resume": codex_resume, "install": "npm install -g @openai/codex"},
+              "parse": parse_codex, "resume": ("codex", "resume", "{sid}"),
+              "flags": {"skip_permissions": ("--yolo",)}, "install": "npm install -g @openai/codex"},
     "opencode": {"root": OPENCODE_HOME, "scan": opencode_scan, "parse": parse_opencode,
-                 "resume": opencode_resume, "install": "curl -fsSL https://opencode.ai/install | bash"},
-    "droid": {"root": DROID_SESSIONS, "files": os.path.join(DROID_SESSIONS, "*.jsonl"), "sid": droid_sid,
-              "parse": parse_droid, "resume": droid_resume,
+                 "resume": ("opencode", "--session", "{sid}"),
+                 "install": "curl -fsSL https://opencode.ai/install | bash"},
+    "droid": {"root": DROID_SESSIONS, "files": os.path.join(DROID_SESSIONS, "*.jsonl"), "sid": jsonl_sid,
+              "parse": parse_droid, "resume": ("droid", "--resume", "{sid}"),
+              "flags": {"skip_permissions": ("--auto", "high")},
               "install": "curl -fsSL https://app.factory.ai/cli | sh"},
     "copilot": {"root": COPILOT_STATE, "files": os.path.join(COPILOT_STATE, "*", "events.jsonl"),
-                "sid": copilot_sid, "parse": parse_copilot, "resume": copilot_resume,
+                "sid": copilot_sid, "parse": parse_copilot, "resume": ("copilot", "--resume={sid}"),
+                "flags": {"skip_permissions": ("--allow-all-tools",)},
                 "install": "npm install -g @github/copilot"},
 }
 
@@ -1226,7 +1206,7 @@ def diagnose_lines():
         state = "on" if settings[key] else "off"
         row(label, state, (C["warn"] if danger else C["accent"]) + B if settings[key] else "")
     for provider, spec in PROVIDERS.items():
-        row(f"{provider} resume", " ".join(spec["resume"]("<id>", settings)))
+        row(f"{provider} resume", " ".join(resume_command(spec, "<id>", settings)))
     out.append("")
 
     section("Tools")
@@ -1282,7 +1262,7 @@ def resume(cwd, uid):
         uid = "claude:" + uid
     provider, _, sid = uid.partition(":")
     settings = read_settings()
-    command = PROVIDERS[provider]["resume"](sid, settings)
+    command = resume_command(PROVIDERS[provider], sid, settings)
     live = live_agents()
     exe = herdr_bin()
 

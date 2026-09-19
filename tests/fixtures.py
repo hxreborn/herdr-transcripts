@@ -240,6 +240,20 @@ ENVIRONMENT = "<environment_context>\n  <cwd>{cwd}</cwd>\n  <approval_policy>on-
 INSTRUCTIONS = "# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\nKeep changes small.\n</INSTRUCTIONS>"
 
 
+def code_dir(home, name):
+    cwd = os.path.join(home, "code", name)
+    os.makedirs(cwd, exist_ok=True)
+    return cwd
+
+
+def write_jsonl(path, lines, age):
+    with open(path, "w") as fh:
+        for line in lines:
+            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
+    when = time.time() - age
+    os.utime(path, (when, when))
+
+
 def codex_record(kind, payload, ordinal):
     return {"timestamp": "2026-09-17T10:00:00.000Z", "ordinal": ordinal, "type": kind, "payload": payload}
 
@@ -250,8 +264,7 @@ def codex_message(role, text):
 
 
 def write_codex(home, index, spec):
-    cwd = os.path.join(home, "code", spec["project"])
-    os.makedirs(cwd, exist_ok=True)
+    cwd = code_dir(home, spec["project"])
     sid = session_id(100 + index)
     day = os.path.join(home, ".codex", "sessions", "2026", "09", "17")
     os.makedirs(day, exist_ok=True)
@@ -303,11 +316,7 @@ def write_codex(home, index, spec):
                                                           "output": [{"type": "input_text", "text": "toolnoise"}]}))
             records.append(("response_item", {"type": "reasoning", "summary": [], "encrypted_content": "gAAAA"}))
         lines = [codex_record(kind, payload, n) for n, (kind, payload) in enumerate(records)]
-    with open(path, "w") as fh:
-        for line in lines:
-            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
-    when = time.time() - spec["age"]
-    os.utime(path, (when, when))
+    write_jsonl(path, lines, spec["age"])
     return sid, cwd
 
 
@@ -334,8 +343,7 @@ def opencode_sid(index):
 
 
 def write_opencode(db, home, index, spec):
-    cwd = os.path.join(home, "code", spec["project"])
-    os.makedirs(cwd, exist_ok=True)
+    cwd = code_dir(home, spec["project"])
     sid = opencode_sid(index)
     stamp = int((time.time() - spec["age"]) * 1000)
     parent = None if spec.get("parent") is None else opencode_sid(spec["parent"])
@@ -403,20 +411,11 @@ def droid_message(role, content):
             "message": {"role": role, "content": content}}
 
 
-def write_droid(path, lines, age):
-    with open(path, "w") as fh:
-        for line in lines:
-            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
-    when = time.time() - age
-    os.utime(path, (when, when))
-
-
 def build_droid(home):
     root = os.path.join(home, ".factory", "sessions")
     shutil.rmtree(os.path.join(home, ".factory"), ignore_errors=True)
     os.makedirs(root, exist_ok=True)
-    cwd = os.path.join(home, "code", "atlas-web")
-    os.makedirs(cwd, exist_ok=True)
+    cwd = code_dir(home, "atlas-web")
     lines = [{"type": "session_start", "id": DROID_SIDS[0], "title": DROID_TITLE,
               "owner": "rafa", "version": 2},
              droid_message("user", [{"type": "text", "text": DROID_REMINDER.format(cwd=cwd)},
@@ -433,8 +432,8 @@ def build_droid(home):
              droid_message("user", [{"type": "text", "text": "Does it still work when the cache is cold?"}]),
              droid_message("assistant", [{"type": "text", "text": "Yes. A cold cache falls through to the"
                                                                  " service and fills itself on the way back."}])]
-    write_droid(os.path.join(root, DROID_SIDS[0] + ".jsonl"), lines, 70 * MINUTE)
-    write_droid(os.path.join(root, DROID_SIDS[1] + ".jsonl"),
+    write_jsonl(os.path.join(root, DROID_SIDS[0] + ".jsonl"), lines, 70 * MINUTE)
+    write_jsonl(os.path.join(root, DROID_SIDS[1] + ".jsonl"),
                 [{"type": "session_start", "id": DROID_SIDS[1], "title": "New Session", "owner": "rafa"}],
                 2 * HOUR)
     return [(DROID_SIDS[0], cwd), (DROID_SIDS[1], "")]
@@ -465,24 +464,18 @@ def copilot_message(role, text, tools=()):
 def write_copilot(root, sid, events, workspace, age):
     folder = os.path.join(root, sid)
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, "events.jsonl")
-    with open(path, "w") as fh:
-        for event in events:
-            fh.write(json.dumps(event, separators=(",", ":")) + "\n")
     with open(os.path.join(folder, "workspace.yaml"), "w") as fh:
         fh.write(f"id: {sid}\nsummary_count: 0\ncreated_at: 2026-09-17T10:00:00.000Z\n")
         for key, value in workspace.items():
             fh.write(f"{key}: {value}\n")
-    when = time.time() - age
-    os.utime(path, (when, when))
+    write_jsonl(os.path.join(folder, "events.jsonl"), events, age)
 
 
 def build_copilot(home):
     root = os.path.join(home, ".copilot", "session-state")
     shutil.rmtree(os.path.join(home, ".copilot"), ignore_errors=True)
     os.makedirs(root, exist_ok=True)
-    cwd = os.path.join(home, "code", "infra")
-    os.makedirs(cwd, exist_ok=True)
+    cwd = code_dir(home, "infra")
     events = [
         copilot_event("session.start", {"sessionId": COPILOT_SIDS[0], "producer": "copilot-agent",
                                         "context": {"cwd": cwd, "gitRoot": cwd,
@@ -503,8 +496,7 @@ def build_copilot(home):
     write_copilot(root, COPILOT_SIDS[0], events,
                   {"cwd": cwd, "branch": "feat/tile-cache", "summary": "Cache the rendered tiles on disk"},
                   80 * MINUTE)
-    other = os.path.join(home, "code", "dotfiles")
-    os.makedirs(other, exist_ok=True)
+    other = code_dir(home, "dotfiles")
     write_copilot(root, COPILOT_SIDS[1],
                   [copilot_message("you", "explain what the prompt hook rewrites"),
                    copilot_message("copilot", "It runs before every prompt and can replace the text that reaches the model.")],
@@ -521,8 +513,7 @@ def session_id(n):
 
 
 def write_session(root, home, index, spec):
-    cwd = os.path.join(home, "code", spec["project"])
-    os.makedirs(cwd, exist_ok=True)
+    cwd = code_dir(home, spec["project"])
     project_dir = os.path.join(root, cwd.replace("/", "-"))
     os.makedirs(project_dir, exist_ok=True)
     sid = session_id(index)
@@ -561,11 +552,7 @@ def write_session(root, home, index, spec):
                                                          " were generated by the user while running local commands."}},
                  {"type": "user", "cwd": cwd, "gitBranch": spec["branch"],
                   "message": {"role": "user", "content": "<command-name>/clear</command-name>"}}]
-    with open(path, "w") as fh:
-        for line in lines:
-            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
-    when = time.time() - spec["age"]
-    os.utime(path, (when, when))
+    write_jsonl(path, lines, spec["age"])
     return sid, cwd
 
 
