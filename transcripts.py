@@ -1543,9 +1543,13 @@ def resume(cwd, uid):
         pane = ((created or {}).get("root_pane") or {}).get("pane_id")
         tab = ((created or {}).get("tab") or {}).get("tab_id")
         if pane:
-            run_herdr(exe, "pane", "send-text", pane, quoted + "\n")
-            # `agent focus` only resolves panes Herdr already tracks as agents, and
-            # the provider has not started yet at this point, so focus the tab.
+            name = re.sub(r"[^a-z0-9_-]", "", f"{provider}-{sid.lower()}")[:26] + f"-{os.getpid() % 100000}"
+            try:
+                subprocess.Popen([exe, "agent", "start", name, "--kind", provider, "--pane", pane,
+                                  "--", *command[1:]], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError:
+                run_herdr(exe, "pane", "send-text", pane, quoted + "\n")
             if not (tab and run_herdr(exe, "tab", "focus", tab)):
                 run_herdr(exe, "agent", "focus", pane)
             return

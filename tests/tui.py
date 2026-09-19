@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 import harness
 
@@ -274,6 +275,15 @@ def state_tests():
     t.close()
 
 
+def agent_start(sb):
+    for _ in range(40):
+        started = [c for c in sb.calls() if c.startswith("agent start")]
+        if started:
+            return started[0]
+        time.sleep(0.05)
+    return ""
+
+
 def resume_tests():
     print("resume")
     sb = harness.sandbox("resume", live=[(2, "working")])
@@ -298,10 +308,10 @@ def resume_tests():
     calls = sb.calls()
     check("the new tab is created in the session's directory",
           any(c.startswith(f"tab create --cwd {idle_cwd} --label checkout-api --no-focus") for c in calls))
-    check("claude is started in that pane with --resume",
-          any(c.startswith("pane send-text") and f"claude --resume {idle_sid}" in c for c in calls))
-    # `agent focus` cannot resolve a pane Herdr does not track yet, and the
-    # provider has not started at this point, so the tab is focused instead.
+    started = agent_start(sb)
+    check("claude is started in that pane through herdr agent start",
+          started.startswith("agent start claude-") and f"--kind claude --pane w1:p9 -- --resume {idle_sid}" in started,
+          started)
     check("the new tab is focused", any(c.startswith("tab focus") for c in calls))
 
     sb.clear_calls()
@@ -309,7 +319,7 @@ def resume_tests():
                    env=env, capture_output=True, text=True, cwd=env["HOME"])
     calls = sb.calls()
     check("a running session is never started twice",
-          not any("send-text" in c or "tab create" in c for c in calls))
+          not any("agent start" in c or "tab create" in c for c in calls))
     check("a running session is focused where it already lives",
           any(c == "agent focus w1:p2" for c in calls))
 
@@ -321,10 +331,11 @@ def resume_tests():
         fh.write("skip_permissions = true\nchrome = true\n")
     subprocess.run([harness.PLUGIN + "/transcripts", "resume", idle_cwd, idle_sid],
                    env=env, capture_output=True, text=True, cwd=env["HOME"])
+    started = agent_start(sb)
     check("armed flags reach the claude command",
-          any("--dangerously-skip-permissions" in c and "--chrome" in c for c in sb.calls()))
-    check("the resume never waits for Herdr to detect the agent",
-          not any("agent start" in c for c in sb.calls()))
+          "--dangerously-skip-permissions" in started and "--chrome" in started, started)
+    check("the tab is focused without waiting for Herdr to detect the agent",
+          any(c.startswith("tab focus") for c in sb.calls()))
 
 
 def binding_tests():
@@ -649,7 +660,7 @@ def codex_tests():
         fh.write("skip_permissions = true\nchrome = true\n")
     subprocess.run([harness.PLUGIN + "/transcripts", "resume", unnamed_cwd, "codex:" + unnamed_sid],
                    env=env, capture_output=True, text=True, cwd=env["HOME"])
-    sent = [c for c in sb.calls() if c.startswith("pane send-text")]
+    sent = [agent_start(sb)]
     check("codex is resumed in its own directory",
           any(c.startswith(f"tab create --cwd {unnamed_cwd} --label atlas-web") for c in sb.calls()))
     check("skip-permissions becomes --yolo for codex", any("--yolo" in c for c in sent), str(sent))

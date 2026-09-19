@@ -20,6 +20,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Resumes start the agent through `herdr agent start`, so Herdr tracks the
+  pane as that agent from the first prompt. The picker doesn't wait for it.
 - The Herdr snapshot is read again right before a resume, so a session that
   went live while the picker was open is focused instead of started twice.
 - Live agents are keyed by the agent name Herdr reports for the session, not
