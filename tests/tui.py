@@ -203,6 +203,7 @@ def state_tests():
     sb = harness.sandbox("states")
     shutil.rmtree(os.path.join(sb.root, ".claude", "projects"))
     shutil.rmtree(os.path.join(sb.root, ".codex", "sessions"))
+    shutil.rmtree(os.path.join(sb.root, ".codex", "archived_sessions"))
     shutil.rmtree(os.path.join(sb.root, ".local", "share", "opencode"))
     shutil.rmtree(os.path.join(sb.root, ".factory", "sessions"))
     shutil.rmtree(os.path.join(sb.root, ".copilot", "session-state"))
@@ -572,6 +573,9 @@ def codex_tests():
     check("an image-first codex session is titled by its first words, not [image]",
           "walk me through the websocket reconnect logic" in screen and "  [image]" not in screen)
     check("a live codex agent is marked", "● blocked" in screen)
+    t.send("codexarchived")
+    check("an archived codex session is listed", "Archive the flaky pager smoke test" in t.text(), t.text())
+    t.send("\x15")
     t.send("websocket")
     screen = t.text()
     check("an unnamed codex session falls back to its first prompt",

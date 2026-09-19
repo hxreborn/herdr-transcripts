@@ -849,7 +849,7 @@ PROVIDERS = {
                "parse": parse_transcript, "resume": ("claude", "--resume", "{sid}"),
                "flags": {key: (flag,) for key, _, flag, _ in FLAGS},
                "install": "npm install -g @anthropic-ai/claude-code"},
-    "codex": {"root": CODEX_SESSIONS, "files": os.path.join(CODEX_SESSIONS, "**", "*.jsonl"), "sid": codex_sid,
+    "codex": {"root": CODEX_SESSIONS, "files": os.path.join(CODEX_HOME, "*sessions", "**", "*.jsonl"), "sid": codex_sid,
               "parse": parse_codex, "resume": ("codex", "resume", "{sid}"),
               "flags": {"skip_permissions": ("--yolo",)}, "install": "npm install -g @openai/codex"},
     "opencode": {"root": OPENCODE_HOME, "scan": opencode_scan, "parse": parse_opencode,

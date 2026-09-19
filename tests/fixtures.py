@@ -210,6 +210,12 @@ CODEX = [
                   ("codex", "Wrote AGENTS.md covering the layout, the commands and the conventions.")],
         "tools": [("shell", '{"command":["bash","-lc","ls -la"]}')],
     },
+    {
+        "title": "Archive the flaky pager smoke test", "project": "infra", "age": 20 * DAY, "archived": True,
+        "turns": [("you", "codexarchived the pager smoke test flakes on Mondays, park it"),
+                  ("codex", "Moved it under tests/quarantine and left a note in the runbook.")],
+        "tools": [],
+    },
 ]
 
 OPENCODE = [
@@ -267,7 +273,7 @@ def codex_message(role, text):
 def write_codex(home, index, spec):
     cwd = code_dir(home, spec["project"])
     sid = session_id(100 + index)
-    day = os.path.join(home, ".codex", "sessions", "2026", "09", "17")
+    day = os.path.join(home, ".codex", "archived_sessions" if spec.get("archived") else "sessions", "2026", "09", "17")
     os.makedirs(day, exist_ok=True)
     path = os.path.join(day, f"rollout-2026-09-17T10-00-{index:02d}-{sid}.jsonl")
     tools = list(spec.get("tools", []))
