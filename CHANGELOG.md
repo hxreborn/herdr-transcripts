@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-19
+
+### Added
+
+- The preview scores the files a session touched against the working tree:
+  files that are still there, files whose deletion a commit recorded, and
+  files that are gone with nothing in git explaining them. One batched
+  `git log` per preview, never per row, and the line degrades to a plain
+  alive-and-gone split when the directory is not a repository or git cannot
+  answer within two seconds.
+
+### Changed
+
+- Preview turns keep 1000 characters instead of 400, matching what the search
+  index holds, so a session can no longer match on a word the preview refuses
+  to show.
+
 ## [1.1.0] - 2026-09-19
 
 ### Added
@@ -47,5 +64,6 @@ All notable changes to this project are documented here. The format follows
 - Diagnostics overlay (`Ctrl+D`) covering dependency versions, index state,
   session counts and Claude Code's `cleanupPeriodDays`, with a one-key fix.
 
+[1.2.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/hxreborn/herdr-transcripts/releases/tag/v1.0.0
