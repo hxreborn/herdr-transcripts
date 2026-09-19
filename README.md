@@ -1,6 +1,6 @@
 # herdr-transcripts
 
-Search the transcripts of your Claude Code and Codex sessions, in a
+Search the transcripts of your coding agent sessions, in a
 [Herdr](https://herdr.dev) popup. Search by title, prompt, reply or tool call.
 
 [![Find a session by a word you remember, reorder, switch to dates, narrow with a second word, and resume it in a new Herdr tab](assets/overview.gif)](assets/overview.mp4)
@@ -20,6 +20,8 @@ Search the transcripts of your Claude Code and Codex sessions, in a
 | ------------------------------------------------------------- | -------------------- | ----------------- | -------------------------------- | ---------- |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects` | `claude --resume` | `--dangerously-skip-permissions` | `--chrome` |
 | [Codex](https://github.com/openai/codex)                      | `~/.codex/sessions`  | `codex resume`    | `--yolo`                         |            |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli)     | `~/.gemini/tmp`      | `gemini --resume` | `--yolo`                         |            |
+| [Qwen Code](https://github.com/QwenLM/qwen-code)              | `~/.qwen/projects`   | `qwen --resume`   | `--yolo`                         |            |
 
 ## Screenshots
 
