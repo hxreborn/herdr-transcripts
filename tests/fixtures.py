@@ -5,6 +5,7 @@ import json
 import os
 import random
 import shutil
+import subprocess
 import sys
 import time
 
@@ -146,6 +147,20 @@ SESSIONS = [
         ],
         "tools": [("Write", "src/config.rs")],
     },
+    {
+        "title": "Fold the two ledger exporters into one job",
+        "project": "ledger", "branch": "main", "age": 45 * DAY, "repo": True,
+        "turns": [
+            ("you", "ledgerscore the ledger exports twice a night, fold the two jobs into one"),
+            ("claude", "nightly.py was a copy of exporter.py on a different schedule. The schedule is a flag"
+                       " on exporter.py now and nightly.py is gone."),
+            ("you", "Did anything else read nightly.py?"),
+            ("claude", "Only the cron unit, and it calls exporter.py --nightly instead."),
+            ("you", "Fine. What was scratch.py for?"),
+            ("claude", "A throwaway I used to diff the two schedules. It is not part of the change."),
+        ],
+        "tools": [("Edit", "exporter.py"), ("Edit", "nightly.py"), ("Write", "scratch.py")],
+    },
 ]
 
 EXTRA = [
@@ -251,6 +266,26 @@ def code_dir(home, name):
     cwd = os.path.join(home, "code", name)
     os.makedirs(cwd, exist_ok=True)
     return cwd
+
+
+GIT_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+           "GIT_AUTHOR_NAME": "fixture", "GIT_AUTHOR_EMAIL": "fixture@example.com",
+           "GIT_COMMITTER_NAME": "fixture", "GIT_COMMITTER_EMAIL": "fixture@example.com"}
+
+
+def build_repo(cwd):
+    def git(*args):
+        subprocess.run(("git", "-C", cwd) + args, env=dict(os.environ, **GIT_ENV),
+                       capture_output=True, check=True)
+
+    git("init", "-q", "-b", "main")
+    for name in ("exporter.py", "nightly.py"):
+        with open(os.path.join(cwd, name), "w") as fh:
+            fh.write(f"run('{name}')\n")
+    git("add", "-A")
+    git("commit", "-qm", "seed the ledger exporters")
+    git("rm", "-q", "nightly.py")
+    git("commit", "-qm", "fold the nightly exporter into exporter.py")
 
 
 def write_jsonl(path, lines, age):
@@ -521,6 +556,8 @@ def session_id(n):
 
 def write_session(root, home, index, spec):
     cwd = code_dir(home, spec["project"])
+    if spec.get("repo"):
+        build_repo(cwd)
     project_dir = os.path.join(root, cwd.replace("/", "-"))
     os.makedirs(project_dir, exist_ok=True)
     sid = session_id(index)

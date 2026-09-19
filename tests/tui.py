@@ -88,6 +88,27 @@ def unit_tests():
     os.remove(custom)
     check("the theme follows HERDR_CONFIG_PATH", "38;2;1;2;3" in header, header[:200])
 
+    scratch = os.path.join(os.environ.get("TRANSCRIPTS_TEST_DIR", "/tmp/transcripts-tests"), "touched")
+    shutil.rmtree(scratch, ignore_errors=True)
+    os.makedirs(scratch)
+    open(os.path.join(scratch, "kept.py"), "w").close()
+    line = vb.touched_line(scratch, ["kept.py", "lost.py"])
+    check("a directory that is not a git repo still splits what is there from what is gone",
+          "2 files touched" in line and "1 still there" in line and "1 gone" in line
+          and "unexplained" not in line, line)
+    check("a session with no tool calls scores nothing", vb.touched_line(scratch, []) == "")
+    check("paths from another machine or outside the session directory are not counted",
+          vb.touched_line(scratch, ["/home/someone-else/atlas/main.py", "../kept.py"]) == "")
+    line = vb.touched_line(os.path.join(scratch, "vanished"), ["kept.py"])
+    check("a directory that no longer exists never reaches git",
+          "1 file touched" in line and "0 still there" in line and "1 gone" in line, line)
+    path = os.environ["PATH"]
+    os.environ["PATH"] = ""
+    line = vb.touched_line(scratch, ["lost.py"])
+    os.environ["PATH"] = path
+    check("no git on PATH degrades to the alive and gone split",
+          "1 gone" in line and "unexplained" not in line, line)
+
 
 def picker_tests():
     print("picker")
@@ -135,6 +156,13 @@ def picker_tests():
           and "Port the auth middleware" not in screen)
     check("preview counts matching messages", "messages match" in screen)
     check("preview labels who spoke", "you ›" in screen)
+
+    t.send("\x15")
+    t.send("ledgerscore")
+    screen = t.text()
+    check("the preview scores the files the session left behind",
+          "3 files touched" in screen and "1 still there" in screen
+          and "1 superseded" in screen and "1 unexplained" in screen, screen)
 
     t.send("\x15")
     t.send("\t")

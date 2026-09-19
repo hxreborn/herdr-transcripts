@@ -43,7 +43,8 @@ RETENTION_TARGET = 3650
 CAP_TEXT = 120000
 CAP_TURNS = 200
 CAP_TURN_CHARS = 1000
-INDEX_VERSION = "v6"
+CAP_FILES = 100
+INDEX_VERSION = "v7"
 POOL_MIN_BYTES = 24 << 20
 
 R = "\033[0m"
@@ -298,6 +299,9 @@ MIDTURN = re.compile(r"new message while you were working:\n(.+?)\n\nThis is how
 PWD_LINE = re.compile(r"^% pwd\n(.+)$", re.M)
 
 
+FILE_KEYS = ("file_path", "filePath", "notebook_path", "absolute_path", "path")
+
+
 def normalize(text, cap):
     clean = CONTROL.sub(" ", IMAGE.sub("[image]", text))
     return " ".join(clean.split())[:cap]
@@ -308,6 +312,16 @@ def tool_args(given, *lead):
     return " ".join([*lead, *(v for k, v in fields if isinstance(v, str) and k != "content")])
 
 
+def tool_files(given):
+    if isinstance(given, str):
+        try:
+            given = json.loads(given)
+        except Exception:
+            return []
+    fields = given.items() if isinstance(given, dict) else []
+    return [v for k, v in fields if k in FILE_KEYS and isinstance(v, str) and v]
+
+
 def readonly_db(path):
     import sqlite3
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -315,7 +329,7 @@ def readonly_db(path):
 
 def parse_transcript(path, agent="claude", title=""):
     cwd = branch = ""
-    prompts, replies, tools = [], [], []
+    prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
     with open(path, "rb") as fh:
@@ -388,17 +402,19 @@ def parse_transcript(path, agent="claude", title=""):
                         (prompts if is_user else replies).append(normalize(text, 1000))
                         total += min(len(text), 1000)
                 elif kind == "tool_use" and total < CAP_TEXT:
+                    files += tool_files(part.get("input"))
                     text = tool_args(part.get("input"))
                     if text:
                         tools.append(normalize(text, 300))
                         total += min(len(text), 300)
-    return make_entry(title, cwd, branch, prompts, replies, tools, turns)
+    return make_entry(title, cwd, branch, prompts, replies, tools, turns, files)
 
 
-def make_entry(title, cwd, branch, prompts, replies, tools, turns):
+def make_entry(title, cwd, branch, prompts, replies, tools, turns, files=()):
     entry = {"title": normalize(title, 200), "cwd": cwd, "branch": normalize(branch, 80),
              "prompts": " | ".join(prompts), "replies": " | ".join(replies), "tools": " | ".join(tools),
-             "opening_prompt": next((text for _, text in turns if text != "[image]"), "")}
+             "opening_prompt": next((text for _, text in turns if text != "[image]"), ""),
+             "files": list(dict.fromkeys(files))[:CAP_FILES]}
     return entry, list(turns)
 
 
@@ -518,7 +534,7 @@ def opencode_scan(provider, spec):
 
 def parse_opencode(path):
     db_path, _, sid = path.rpartition("/")
-    prompts, replies, tools = [], [], []
+    prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
     db = readonly_db(db_path)
@@ -530,6 +546,7 @@ def parse_opencode(path):
             if total >= CAP_TEXT:
                 continue
             part = json.loads(data)
+            files += tool_files((part.get("state") or {}).get("input"))
             text = tool_args((part.get("state") or {}).get("input"), part.get("tool") or "").strip()
             if text:
                 tools.append(normalize(text, 300))
@@ -547,7 +564,7 @@ def parse_opencode(path):
             (prompts if is_user else replies).append(normalize(text, 1000))
             total += min(len(text), 1000)
     db.close()
-    return make_entry(title, cwd, "", prompts, replies, tools, turns)
+    return make_entry(title, cwd, "", prompts, replies, tools, turns, files)
 
 
 def jsonl_sid(path):
@@ -586,7 +603,7 @@ def copilot_workspace(path):
 
 def parse_copilot(path):
     cwd = branch = ""
-    prompts, replies, tools = [], [], []
+    prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
     with open(path, "rb") as fh:
@@ -613,13 +630,14 @@ def parse_copilot(path):
                     (prompts if is_user else replies).append(normalize(text, 1000))
                     total += min(len(text), 1000)
             for call in data.get("toolRequests") or []:
+                files += tool_files(call.get("arguments") if isinstance(call, dict) else None)
                 text = tool_args(call.get("arguments") if isinstance(call, dict) else None)
                 if text and total < CAP_TEXT:
                     tools.append(normalize(text, 300))
                     total += min(len(text), 300)
     workspace = copilot_workspace(path)
     return make_entry(workspace.get("summary", ""), cwd or workspace.get("cwd", ""),
-                      branch or workspace.get("branch", ""), prompts, replies, tools, turns)
+                      branch or workspace.get("branch", ""), prompts, replies, tools, turns, files)
 
 
 GEMINI_HOME = os.path.join(HOME, ".gemini")
@@ -667,8 +685,8 @@ def project_cwd(path):
     return project_paths().get(os.path.basename(os.path.dirname(os.path.dirname(path))), "")
 
 
-def hashed_entry(title, cwd, branch, prompts, replies, tools, turns):
-    entry, turns = make_entry(title, cwd, branch, prompts, replies, tools, turns)
+def hashed_entry(title, cwd, branch, prompts, replies, tools, turns, files=()):
+    entry, turns = make_entry(title, cwd, branch, prompts, replies, tools, turns, files)
     if not cwd:
         entry["paths"] = len(project_paths())
     return entry, turns
@@ -709,7 +727,7 @@ def gemini_records(path):
 def parse_gemini(path):
     meta, messages = gemini_records(path)
     cwd = project_cwd(path) if (meta.get("kind") or "main") == "main" else ""
-    prompts, replies, tools = [], [], []
+    prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
     for message in messages:
@@ -733,6 +751,7 @@ def parse_gemini(path):
         for call in message.get("toolCalls") or []:
             if not isinstance(call, dict) or total >= CAP_TEXT:
                 continue
+            files += tool_files(call.get("args"))
             text = tool_args(call.get("args"), str(call.get("name") or "")).strip()
             if text:
                 tools.append(normalize(text, 300))
@@ -744,12 +763,12 @@ def parse_gemini(path):
         if total < CAP_TEXT:
             (prompts if kind == "user" else replies).append(normalize(text, 1000))
             total += min(len(text), 1000)
-    return hashed_entry(meta.get("summary") or "", cwd, "", prompts, replies, tools, turns)
+    return hashed_entry(meta.get("summary") or "", cwd, "", prompts, replies, tools, turns, files)
 
 
 def parse_qwen(path):
     cwd = branch = ""
-    prompts, replies, tools = [], [], []
+    prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
     with open(path, "rb") as fh:
@@ -776,6 +795,7 @@ def parse_qwen(path):
                     continue
                 call = part.get("functionCall")
                 if isinstance(call, dict):
+                    files += tool_files(call.get("args"))
                     text = tool_args(call.get("args"), str(call.get("name") or "")).strip()
                     if text and total < CAP_TEXT:
                         tools.append(normalize(text, 300))
@@ -791,7 +811,7 @@ def parse_qwen(path):
             if total < CAP_TEXT:
                 (prompts if is_user else replies).append(normalize(text, 1000))
                 total += min(len(text), 1000)
-    return make_entry("", cwd, branch, prompts, replies, tools, turns)
+    return make_entry("", cwd, branch, prompts, replies, tools, turns, files)
 
 
 def kimi_sid(path):
@@ -800,7 +820,7 @@ def kimi_sid(path):
 
 def parse_kimi(path):
     cwd = project_cwd(path)
-    prompts, replies, tools = [], [], []
+    prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
     with open(path, "rb") as fh:
@@ -831,6 +851,7 @@ def parse_kimi(path):
                 given = call.get("function") if isinstance(call, dict) else None
                 if not isinstance(given, dict) or total >= CAP_TEXT:
                     continue
+                files += tool_files(given.get("arguments"))
                 text = f"{given.get('name') or ''} {given.get('arguments') or ''}".strip()
                 if text:
                     tools.append(normalize(text, 300))
@@ -842,7 +863,7 @@ def parse_kimi(path):
             if total < CAP_TEXT:
                 (prompts if role == "user" else replies).append(normalize(text, 1000))
                 total += min(len(text), 1000)
-    return hashed_entry("", cwd, "", prompts, replies, tools, turns)
+    return hashed_entry("", cwd, "", prompts, replies, tools, turns, files)
 
 
 PROVIDERS = {
@@ -971,7 +992,7 @@ def index_entries(files):
             entry, turns = result
             entry["key"] = key
             write_json(turns_path(uid), {"cwd": entry["cwd"], "branch": entry["branch"],
-                                         "turns": turns})
+                                         "files": entry.pop("files"), "turns": turns})
         fresh[uid] = entry
         yield mtime, size, uid, entry
     if stale or set(fresh) != set(cache):
@@ -1041,6 +1062,44 @@ def list_rows():
         first = False
 
 
+def git_deletions(cwd, paths):
+    try:
+        done = subprocess.run(["git", "-C", cwd, "log", "--diff-filter=D", "--name-only", "--relative",
+                               "--no-renames", "--format=", "-z", "--", *paths],
+                              capture_output=True, text=True, timeout=2)
+    except Exception:
+        return None
+    return {name for name in done.stdout.split("\0") if name} if not done.returncode else None
+
+
+def touched_line(cwd, given):
+    cwd = cwd.rstrip("/")
+    if not cwd:
+        return ""
+    alive, gone = [], []
+    for raw in given:
+        path = os.path.normpath(os.path.join(cwd, raw))
+        if not path.startswith(cwd + os.sep) or os.path.isdir(path):
+            continue
+        (alive if os.path.exists(path) else gone).append(os.path.relpath(path, cwd))
+    if not alive and not gone:
+        return ""
+    parts = [plural(len(alive) + len(gone), "file") + " touched", f"{len(alive)} still there"]
+    deleted = set()
+    if gone:
+        deleted = git_deletions(cwd, gone) if os.path.isdir(cwd) else None
+    if deleted is None:
+        parts.append(f"{len(gone)} gone")
+    else:
+        superseded = sum(1 for path in gone
+                         if path in deleted or any(name.startswith(path + "/") for name in deleted))
+        if superseded:
+            parts.append(f"{superseded} superseded")
+        if len(gone) > superseded:
+            parts.append(f"{len(gone) - superseded} unexplained")
+    return C["dim"] + "  ·  ".join(parts) + R
+
+
 def preview(uid, query):
     terms = [t.lstrip("'^").rstrip("$") for t in query.split() if not t.startswith("!")]
     terms = [t for t in terms if t]
@@ -1064,6 +1123,9 @@ def preview(uid, query):
     if agent:
         tab = agent.get("terminal_title_stripped") or agent.get("pane_id", "")
         print(f"{status_chip(agent)} {C['dim']}in this Herdr session  ·  {tab}{R}")
+    touched = touched_line(entry.get("cwd", ""), entry.get("files") or [])
+    if touched:
+        print(touched)
     print()
     if pattern:
         hits = [t for t in turns if pattern.search(t[1])]
