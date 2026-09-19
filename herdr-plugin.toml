@@ -2,7 +2,7 @@ id = "transcripts"
 name = "transcripts"
 version = "1.0.0"
 min_herdr_version = "0.7.0"
-description = "Simple fzf finder for session transcripts of coding agents like Claude Code and Codex."
+description = "Search your coding-agent sessions, past and live, by any word you remember, then jump to them or resume them."
 platforms = ["linux", "macos"]
 
 [[build]]

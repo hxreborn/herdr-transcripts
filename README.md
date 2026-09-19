@@ -1,26 +1,40 @@
 # herdr-transcripts
 
-Search the transcripts of your Claude Code, Codex and OpenCode sessions, in a
-[Herdr](https://herdr.dev) popup. Search by title, prompt, reply or tool call.
+Search your coding-agent sessions, past and live, by any word you remember,
+then jump to them or resume them in a [Herdr](https://herdr.dev) tab. Search
+by title, prompt, reply or tool call.
 
 [![Find a session by a word you remember, reorder, switch to dates, narrow with a second word, and resume it in a new Herdr tab](assets/overview.gif)](assets/overview.mp4)
 
 ## Features
 
+- Covers the main coding agents in one list
 - Search words across titles, prompts, replies and tool calls
 - Highlighted matches in previews
 - Mouse-first like Herdr, with a key for everything
 - Filters by agent and cwd
-- Incremental index, pre-warmed, parallel parsing (~110 ms on 3 GiB)
+- Incremental index, pre-warmed, parallel parsing: a cold rebuild of 3.8 GiB
+  takes under a second, a warm list about 0.2 s
 - Python standard library and `fzf`
 
 ## Supported agents
 
-| Agent                                                         | Transcripts               | Resume               | `Ctrl+X`                         | `Ctrl+B`   |
-| ------------------------------------------------------------- | ------------------------- | -------------------- | -------------------------------- | ---------- |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects`      | `claude --resume`    | `--dangerously-skip-permissions` | `--chrome` |
-| [Codex](https://github.com/openai/codex)                      | `~/.codex/sessions`       | `codex resume`       | `--yolo`                         |            |
-| [OpenCode](https://opencode.ai)                               | `~/.local/share/opencode` | `opencode --session` |                                  |            |
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code),
+[Codex](https://github.com/openai/codeSearch past
+
+[OpenCode](https://opencode.ai),
+[Gemini CLI](https://github.com/google-gemini/gemini-cli),
+[Droid](https://factory.ai),
+[Copilot CLI](https://github.com/github/copilot-cli),
+[Kimi Code](https://github.com/MoonshotAI/kimi-cli) and
+[Qwen Code](https://github.com/QwenLM/qwen-code).
+
+`Ctrl+X` toggles each agent's own skip-permissions flag, `--yolo`,
+`--allow-all-tools` or `--auto high` as the agent spells it. `Ctrl+D` shows
+where each agent's transcripts are read from and the exact resume command.
+
+A session already running in Herdr shows a status chip, and `Enter` focuses it
+instead of starting it again.
 
 ## Screenshots
 
@@ -78,7 +92,7 @@ herdr server reload-config
 ## Usage
 
 Type a word. Matches are newest first. `Enter` resumes the session in its own
-directory, or focuses its pane if it is already running.
+directory, or focuses its pane if it's already running.
 
 `Tab` cycles the search scope:
 
@@ -121,7 +135,8 @@ changes the sort order.
 The picker saves scope, sort, time format, agent filter, and resume flags in
 `~/.config/herdr/plugins/config/transcripts/config.toml`.
 
-Colours come from `[theme.custom]` in `~/.config/herdr/config.toml`.
+Colours come from `[theme.custom]` in the Herdr config, at `HERDR_CONFIG_PATH`
+when Herdr sets it and `~/.config/herdr/config.toml` otherwise.
 
 ## Diagnostics
 
