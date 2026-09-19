@@ -20,8 +20,7 @@ by title, prompt, reply or tool call.
 ## Supported agents
 
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code),
-[Codex](https://github.com/openai/codeSearch past
-
+[Codex](https://github.com/openai/codex),
 [OpenCode](https://opencode.ai),
 [Gemini CLI](https://github.com/google-gemini/gemini-cli),
 [Droid](https://factory.ai),
