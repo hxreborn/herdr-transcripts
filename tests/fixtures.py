@@ -391,6 +391,127 @@ def build_opencode(home):
     return made
 
 
+DROID_SIDS = ("a3f1c0d2-1f4e-4b77-9c01-5d2e8ab41c60", "b7e4d9aa-2c85-4f13-8e6a-0c9b7d3f2a14")
+DROID_REMINDER = ("<system-reminder>\n\nUser system info (linux 6.17.7-2-cachyos)\nToday's date: 2026-09-17\n\n"
+                  "# The commands below were executed at the start of all sessions.\n\n"
+                  "% pwd\n{cwd}\n\n% ls\nREADME.md\nsrc\nreminderleak\n</system-reminder>")
+DROID_TITLE = "Move the droid picker off the deprecated tiles endpoint"
+
+
+def droid_message(role, content):
+    return {"type": "message", "id": DROID_SIDS[0], "timestamp": "2026-09-17T10:00:00.000Z",
+            "message": {"role": role, "content": content}}
+
+
+def write_droid(path, lines, age):
+    with open(path, "w") as fh:
+        for line in lines:
+            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
+    when = time.time() - age
+    os.utime(path, (when, when))
+
+
+def build_droid(home):
+    root = os.path.join(home, ".factory", "sessions")
+    shutil.rmtree(os.path.join(home, ".factory"), ignore_errors=True)
+    os.makedirs(root, exist_ok=True)
+    cwd = os.path.join(home, "code", "atlas-web")
+    os.makedirs(cwd, exist_ok=True)
+    lines = [{"type": "session_start", "id": DROID_SIDS[0], "title": DROID_TITLE,
+              "owner": "rafa", "version": 2},
+             droid_message("user", [{"type": "text", "text": DROID_REMINDER.format(cwd=cwd)},
+                                    {"type": "text", "text": DROID_TITLE}]),
+             droid_message("assistant", [{"type": "thinking", "thinking": "reminderleak about the endpoint"},
+                                         {"type": "text", "text": "The old endpoint answers 410 now, so the"
+                                                                  " picker reads the tiles service instead."},
+                                         {"type": "tool_use", "name": "Edit",
+                                          "input": {"file_path": "src/picker/tiles.py"}}]),
+             droid_message("user", [{"type": "tool_result", "tool_use_id": "toolu_1",
+                                     "content": "toolnoise 12 tiles"}]),
+             {"type": "todo_state", "id": DROID_SIDS[0], "timestamp": "2026-09-17T10:01:00.000Z",
+              "todos": {"todos": [{"id": "1", "content": "toolnoise the cache", "status": "pending"}]}},
+             droid_message("user", [{"type": "text", "text": "Does it still work when the cache is cold?"}]),
+             droid_message("assistant", [{"type": "text", "text": "Yes. A cold cache falls through to the"
+                                                                 " service and fills itself on the way back."}])]
+    write_droid(os.path.join(root, DROID_SIDS[0] + ".jsonl"), lines, 70 * MINUTE)
+    write_droid(os.path.join(root, DROID_SIDS[1] + ".jsonl"),
+                [{"type": "session_start", "id": DROID_SIDS[1], "title": "New Session", "owner": "rafa"}],
+                2 * HOUR)
+    return [(DROID_SIDS[0], cwd), (DROID_SIDS[1], "")]
+
+
+COPILOT_SIDS = ("c2a8b641-7d30-4e92-a15b-6f8c0d47e3b9", "d5c93e07-4a61-48be-b072-91af2e6c5d38")
+COPILOT_NOISE = ("<current_datetime>2026-09-17T10:00:00.000Z</current_datetime>\n\n{content}\n\n"
+                 "<reminder>\n<sql_tables>No tables exist yet, transformedleak.</sql_tables>\n</reminder>")
+
+
+def copilot_event(kind, data):
+    return {"type": kind, "data": data, "id": COPILOT_SIDS[0],
+            "timestamp": "2026-09-17T10:00:00.000Z", "parentId": COPILOT_SIDS[1]}
+
+
+def copilot_message(role, text, tools=()):
+    if role == "you":
+        return copilot_event("user.message", {"content": text, "attachments": [],
+                                              "transformedContent": COPILOT_NOISE.format(content=text)})
+    return copilot_event("assistant.message", {"messageId": COPILOT_SIDS[0], "content": text,
+                                               "reasoningOpaque": "transformedleak/gAAAA",
+                                               "toolRequests": [{"toolCallId": "tooluse_1", "name": name,
+                                                                 "arguments": {"path": arg},
+                                                                 "type": "function"}
+                                                                for name, arg in tools]})
+
+
+def write_copilot(root, sid, events, workspace, age):
+    folder = os.path.join(root, sid)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "events.jsonl")
+    with open(path, "w") as fh:
+        for event in events:
+            fh.write(json.dumps(event, separators=(",", ":")) + "\n")
+    with open(os.path.join(folder, "workspace.yaml"), "w") as fh:
+        fh.write(f"id: {sid}\nsummary_count: 0\ncreated_at: 2026-09-17T10:00:00.000Z\n")
+        for key, value in workspace.items():
+            fh.write(f"{key}: {value}\n")
+    when = time.time() - age
+    os.utime(path, (when, when))
+
+
+def build_copilot(home):
+    root = os.path.join(home, ".copilot", "session-state")
+    shutil.rmtree(os.path.join(home, ".copilot"), ignore_errors=True)
+    os.makedirs(root, exist_ok=True)
+    cwd = os.path.join(home, "code", "infra")
+    os.makedirs(cwd, exist_ok=True)
+    events = [
+        copilot_event("session.start", {"sessionId": COPILOT_SIDS[0], "producer": "copilot-agent",
+                                        "context": {"cwd": cwd, "gitRoot": cwd,
+                                                    "branch": "feat/tile-cache"}}),
+        copilot_event("session.info", {"infoType": "model", "message": "Model changed to: gpt-5"}),
+        copilot_message("you", "Cache the rendered tiles on disk"),
+        copilot_event("assistant.turn_start", {"turnId": "0"}),
+        copilot_message("copilot", "", [("view", "src/tiles.py")]),
+        copilot_event("tool.execution_start", {"toolCallId": "tooluse_1", "toolName": "view",
+                                               "arguments": {"path": "src/tiles.py"}}),
+        copilot_event("tool.execution_complete", {"toolCallId": "tooluse_1",
+                                                  "result": "toolnoise 40 lines read"}),
+        copilot_message("copilot", "The renders land in a content-addressed cache now, so a repeat request never re-renders."),
+        copilot_event("assistant.turn_end", {"turnId": "0"}),
+        copilot_event("system.notification", {"message": "toolnoise compaction ahead"}),
+        copilot_event("session.shutdown", {}),
+    ]
+    write_copilot(root, COPILOT_SIDS[0], events,
+                  {"cwd": cwd, "branch": "feat/tile-cache", "summary": "Cache the rendered tiles on disk"},
+                  80 * MINUTE)
+    other = os.path.join(home, "code", "dotfiles")
+    os.makedirs(other, exist_ok=True)
+    write_copilot(root, COPILOT_SIDS[1],
+                  [copilot_message("you", "explain what the prompt hook rewrites"),
+                   copilot_message("copilot", "It runs before every prompt and can replace the text that reaches the model.")],
+                  {"cwd": other, "branch": "main"}, 3 * HOUR)
+    return [(COPILOT_SIDS[0], cwd), (COPILOT_SIDS[1], other)]
+
+
 def session_id(n):
     rnd = random.Random(n)
     hexes = "%08x-%04x-4%03x-%04x-%012x" % (
@@ -465,6 +586,8 @@ def build(home):
         made.append(write_session(root, home, index, spec))
     with open(os.path.join(home, ".claude", "settings.json"), "w") as fh:
         json.dump({"cleanupPeriodDays": 3650}, fh, indent=2)
+    build_droid(home)
+    build_copilot(home)
     return made
 
 
