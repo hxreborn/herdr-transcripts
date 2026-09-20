@@ -44,7 +44,7 @@ CAP_TEXT = 120000
 CAP_TURNS = 200
 CAP_TURN_CHARS = 1000
 CAP_FILES = 100
-INDEX_VERSION = "v8"
+INDEX_VERSION = "v9"
 POOL_MIN_BYTES = 24 << 20
 
 R = "\033[0m"
@@ -455,9 +455,28 @@ def codex_sid(path):
     return os.path.basename(path)[:-len(".jsonl")][-36:]
 
 
+def codex_patch_files(raw):
+    try:
+        payload = json.loads(raw).get("payload") or {}
+    except Exception:
+        return []
+    if payload.get("type") != "patch_apply_end" or payload.get("success") is not True:
+        return []
+    changes = payload.get("changes")
+    found = []
+    for path, change in (changes.items() if isinstance(changes, dict) else ()):
+        if not isinstance(path, str) or not path:
+            continue
+        found.append(path)
+        moved = change.get("move_path") if isinstance(change, dict) else None
+        if isinstance(moved, str) and moved:
+            found.append(moved)
+    return found
+
+
 def parse_codex(path):
     cwd = ""
-    prompts, replies, tools = [], [], []
+    prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = 0
     with open(path, "rb") as fh:
@@ -472,6 +491,9 @@ def parse_codex(path):
             if b'"type":"turn_context"' in head:
                 if not cwd:
                     cwd = (json.loads(raw).get("payload") or {}).get("cwd") or ""
+                continue
+            if b'"patch_apply_end"' in head:
+                files += codex_patch_files(raw)
                 continue
             is_call = b'"type":"function_call"' in head or b'"type":"custom_tool_call"' in head
             if not is_call and b'"type":"message"' not in head:
@@ -511,7 +533,7 @@ def parse_codex(path):
                 (prompts if role == "user" else replies).append(normalize(text, 1000))
                 total += min(len(text), 1000)
     title, branch = codex_threads().get(codex_sid(path), ("", ""))
-    return make_entry(title, cwd, branch, prompts, replies, tools, turns)
+    return make_entry(title, cwd, branch, prompts, replies, tools, turns, files)
 
 
 def opencode_scan(provider, spec):

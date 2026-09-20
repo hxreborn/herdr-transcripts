@@ -123,8 +123,9 @@ The preview checks the files a session touched against your tree:
 
 *Superseded* means a commit recorded the deletion. *Unexplained* means it is gone
 and git never recorded it going. One batched `git log` per preview, never per row,
-and it degrades to there-and-gone outside a repository. Codex shows no line: its
-edits ride inside `apply_patch` shell text with no path to read.
+and it degrades to there-and-gone outside a repository. Codex is read from the
+paths its own patches report, so its line misses anything written by a plain
+shell command.
 
 ## Keys
 
