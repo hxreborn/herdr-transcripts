@@ -11,6 +11,7 @@ by title, prompt, reply or tool call.
 - Covers the main coding agents in one list
 - Search words across titles, prompts, replies and tool calls
 - Highlighted matches in previews
+- Scores a session against your tree: what it touched, what survived
 - Mouse-first like Herdr, with a key for everything
 - Filters by agent and cwd
 - Incremental index, pre-warmed, parallel parsing: a cold rebuild of 3.8 GiB
@@ -111,6 +112,19 @@ or `!` to exclude it. `^` and `$` anchor a word.
 changes the sort order.
 
 `./transcripts` outside Herdr runs the picker in the current terminal.
+
+## What a session left behind
+
+The preview checks the files a session touched against your tree:
+
+```
+9 files touched  ·  7 still there  ·  1 superseded  ·  1 unexplained
+```
+
+*Superseded* means a commit recorded the deletion. *Unexplained* means it is gone
+and git never recorded it going. One batched `git log` per preview, never per row,
+and it degrades to there-and-gone outside a repository. Codex shows no line: its
+edits ride inside `apply_patch` shell text with no path to read.
 
 ## Keys
 
