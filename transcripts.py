@@ -1458,12 +1458,7 @@ def diagnose_lines():
     def row(key, value, color=""):
         out.append(f"  {C['dim']}{key:<24}{R}{color}{value}{R}")
 
-    cleanup = None
-    try:
-        with open(SETTINGS) as fh:
-            cleanup = json.load(fh).get("cleanupPeriodDays")
-    except Exception:
-        pass
+    cleanup = cleanup_days()
     effective = 30 if cleanup is None else cleanup
 
     now = time.time()
@@ -1576,12 +1571,17 @@ def apply_retention():
     return diagnose_lines()
 
 
-def retention_needed():
+def cleanup_days():
     try:
         with open(SETTINGS) as fh:
             value = json.load(fh).get("cleanupPeriodDays")
     except Exception:
-        value = None
+        return None
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def retention_needed():
+    value = cleanup_days()
     return value is None or value <= 30
 
 
