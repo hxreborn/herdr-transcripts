@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-21
+
+### Added
+
+- Codex sessions get the touched-files line too. Codex records each applied
+  patch in an `event_msg` record whose payload type is `patch_apply_end`,
+  carrying the paths it changed, and the parser now reads those instead of
+  giving up on `apply_patch` shell text. A rename keeps both its source and
+  its destination, so the source scores as gone and the destination as alive.
+  Nothing written by a plain shell command is visible this way, so the line
+  is a floor rather than an inventory.
+
+### Fixed
+
+- The diagnostics overlay no longer crashes when `cleanupPeriodDays` in
+  `settings.json` holds something other than a number. A quoted `"30"` raised
+  a `TypeError` and took `Ctrl+D` down with it; a non-number now reads as
+  unset, which is also what the retention fix writes over.
+
+### Changed
+
+- `INDEX_VERSION` moved to v9, so the first run after upgrading reparses every
+  session once. That costs a couple of seconds for a few GiB of transcripts.
+
 ## [1.2.0] - 2026-09-19
 
 ### Added
