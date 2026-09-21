@@ -14,8 +14,8 @@ by title, prompt, reply or tool call.
 - Scores a session against your tree: what it touched, what survived
 - Mouse-first like Herdr, with a key for everything
 - Filters by agent and cwd
-- Incremental index, pre-warmed, parallel parsing: a cold rebuild of 3.8 GiB
-  takes under a second, a warm list about 0.2 s
+- Incremental index, pre-warmed, parallel parsing: a cold rebuild of 5 GiB
+  takes a couple of seconds, a warm list about 0.2 s
 - Python standard library and `fzf`
 
 ## Supported agents
