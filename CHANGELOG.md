@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-10-08
+
+### Fixed
+
+- Resuming no longer fails with "claude not found" when the Herdr server runs
+  with a bare `PATH`. A server started by `systemd --user` before the session
+  environment was imported inherits only `/usr/local/bin:/usr/bin`, so an agent
+  installed in `~/.local/bin` or an npm prefix looked missing. When the
+  inherited `PATH` has no match, the command is looked up through the login
+  shell (`$SHELL -lc 'command -v <agent>'`), and the diagnostics overlay reports
+  the same path the resume uses.
+
 ## [1.3.0] - 2026-09-21
 
 ### Added
@@ -88,6 +100,8 @@ All notable changes to this project are documented here. The format follows
 - Diagnostics overlay (`Ctrl+D`) covering dependency versions, index state,
   session counts and Claude Code's `cleanupPeriodDays`, with a one-key fix.
 
+[1.3.1]: https://github.com/hxreborn/herdr-transcripts/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/hxreborn/herdr-transcripts/releases/tag/v1.0.0
