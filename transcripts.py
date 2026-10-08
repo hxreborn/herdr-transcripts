@@ -212,10 +212,11 @@ def human_size(n):
 
 def find_command(name):
     found = shutil.which(name)
-    if found or not os.environ.get("SHELL"):
+    shell = os.environ.get("SHELL")
+    if found or not shell:
         return found
     try:
-        done = subprocess.run([os.environ["SHELL"], "-lc", f"command -v {shlex.quote(name)}"],
+        done = subprocess.run([shell, "-lc", f"command -v {shlex.quote(name)}"],
                               capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None

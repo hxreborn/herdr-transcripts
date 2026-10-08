@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+from unittest import mock
 
 import harness
 
@@ -118,14 +119,8 @@ def unit_tests():
     with open(login, "w") as fh:
         fh.write(f"#!/bin/sh\nPATH={bindir}:$PATH exec /bin/sh \"$@\"\n")
     os.chmod(login, 0o755)
-    shell = os.environ.get("SHELL")
-    os.environ["PATH"], os.environ["SHELL"] = "/usr/bin:/bin", login
-    found, missing = vb.find_command("agentx"), vb.find_command("no-such-agent")
-    os.environ["PATH"] = path
-    if shell is None:
-        del os.environ["SHELL"]
-    else:
-        os.environ["SHELL"] = shell
+    with mock.patch.dict(os.environ, PATH="/usr/bin:/bin", SHELL=login):
+        found, missing = vb.find_command("agentx"), vb.find_command("no-such-agent")
     check("a tool only on the login shell PATH is still found", found == tool, found)
     check("a tool missing from the login shell too is reported missing", missing is None, missing)
     capped = [f"capped{n}.py" for n in range(vb.CAP_FILES + 1)]
