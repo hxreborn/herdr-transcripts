@@ -108,6 +108,26 @@ def unit_tests():
     os.environ["PATH"] = path
     check("no git on PATH degrades to the alive and gone split",
           "1 gone" in line and "unexplained" not in line, line)
+    bindir = os.path.join(scratch, "userbin")
+    os.makedirs(bindir)
+    tool = os.path.join(bindir, "agentx")
+    with open(tool, "w") as fh:
+        fh.write("#!/bin/sh\n")
+    os.chmod(tool, 0o755)
+    login = os.path.join(scratch, "loginsh")
+    with open(login, "w") as fh:
+        fh.write(f"#!/bin/sh\nPATH={bindir}:$PATH exec /bin/sh \"$@\"\n")
+    os.chmod(login, 0o755)
+    shell = os.environ.get("SHELL")
+    os.environ["PATH"], os.environ["SHELL"] = "/usr/bin:/bin", login
+    found, missing = vb.find_command("agentx"), vb.find_command("no-such-agent")
+    os.environ["PATH"] = path
+    if shell is None:
+        del os.environ["SHELL"]
+    else:
+        os.environ["SHELL"] = shell
+    check("a tool only on the login shell PATH is still found", found == tool, found)
+    check("a tool missing from the login shell too is reported missing", missing is None, missing)
     capped = [f"capped{n}.py" for n in range(vb.CAP_FILES + 1)]
     for name in capped[:3]:
         open(os.path.join(scratch, name), "w").close()

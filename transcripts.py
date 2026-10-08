@@ -210,6 +210,20 @@ def human_size(n):
     return f"{n:.1f}TB"
 
 
+def find_command(name):
+    found = shutil.which(name)
+    if found or not os.environ.get("SHELL"):
+        return found
+    try:
+        done = subprocess.run([os.environ["SHELL"], "-lc", f"command -v {shlex.quote(name)}"],
+                              capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = done.stdout.strip().splitlines()
+    found = lines[-1] if lines else ""
+    return found if os.path.isabs(found) and os.access(found, os.X_OK) else None
+
+
 def herdr_bin():
     return os.environ.get("HERDR_BIN_PATH") or shutil.which("herdr")
 
@@ -1534,7 +1548,7 @@ def diagnose_lines():
 
     section("Tools")
     for tool in (*PROVIDERS, "fzf", "python3"):
-        path = shutil.which(tool)
+        path = find_command(tool)
         row(tool, path or "not found", "" if path else C["red"] + B)
     version = fzf_version()
     if version:
@@ -1610,7 +1624,8 @@ def resume(cwd, uid):
                 f"{C['dim']}Switch to it yourself, or close it and resume from here again.{R}"])
         return
 
-    if not shutil.which(command[0]):
+    found = find_command(command[0])
+    if not found:
         show_message(f"{command[0]} not found", [
             f"{C['red']}The {command[0]} command is not on PATH, so this session cannot be resumed.{R}", "",
             f"{C['dim']}Install it, then try again:{R}",
@@ -1650,7 +1665,7 @@ def resume(cwd, uid):
         return
 
     os.chdir(cwd)
-    os.execvp(command[0], command)
+    os.execv(found, command)
 
 
 def show_status(text):
