@@ -905,11 +905,11 @@ def parse_kimi(path):
 
 PROVIDERS = {
     "claude": {"root": PROJECTS, "files": os.path.join(PROJECTS, "*", "*.jsonl"), "sid": jsonl_sid,
-               "parse": parse_transcript, "resume": ("claude", "--resume", "{sid}"),
+               "parse": parse_transcript, "resume": ("claude", "--resume", "{sid}"), "resumes_from_any_cwd": True,
                "flags": {key: (flag,) for key, _, flag, _ in FLAGS},
                "install": "npm install -g @anthropic-ai/claude-code"},
     "codex": {"root": CODEX_SESSIONS, "files": os.path.join(CODEX_HOME, "*sessions", "**", "*.jsonl"), "sid": codex_sid,
-              "parse": parse_codex, "resume": ("codex", "resume", "{sid}"),
+              "parse": parse_codex, "resume": ("codex", "resume", "{sid}"), "resumes_from_any_cwd": True,
               "flags": {"skip_permissions": ("--yolo",)}, "install": "npm install -g @openai/codex"},
     "opencode": {"root": OPENCODE_HOME, "scan": opencode_scan, "parse": parse_opencode,
                  "resume": ("opencode", "--session", "{sid}"),
@@ -1633,6 +1633,10 @@ def resume(cwd, uid):
             f"  {C['text']}{PROVIDERS[provider]['install']}{R}"])
         return
 
+    label = os.path.basename(cwd.rstrip("/")) or command[0]
+    if not os.path.isdir(cwd) and PROVIDERS[provider].get("resumes_from_any_cwd"):
+        picker_cwd = context_cwd()
+        cwd = picker_cwd if os.path.isdir(picker_cwd) else os.path.expanduser("~")
     if not os.path.isdir(cwd):
         show_message("session directory missing", [
             f"{C['red']}The session was recorded in{R}",
@@ -1644,7 +1648,6 @@ def resume(cwd, uid):
 
     quoted = " ".join(shlex.quote(part) for part in command)
     if exe and os.environ.get("HERDR_PLUGIN_ROOT"):
-        label = os.path.basename(cwd.rstrip("/")) or command[0]
         created = herdr_call("tab", "create", "--cwd", cwd, "--label", label, "--no-focus")
         pane = ((created or {}).get("root_pane") or {}).get("pane_id")
         tab = ((created or {}).get("tab") or {}).get("tab_id")

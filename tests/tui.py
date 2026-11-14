@@ -596,10 +596,35 @@ def retention_tests():
     missing = harness.sandbox("resume-gone")
     sid, cwd = missing.sessions[0]
     shutil.rmtree(cwd)
+    missing.context_cwd = os.path.join(missing.root, "code", "picker-here")
+    os.makedirs(missing.context_cwd)
     env = missing.env()
     t = harness.Term([harness.PLUGIN + "/transcripts", "resume", cwd, sid], env, cols=90, rows=22)
     t.wait_idle()
-    check("a session whose directory is gone says so", "session directory missing" in t.text())
+    check("a claude session whose directory is gone resumes from the picker's directory",
+          "session directory missing" not in t.text())
+    t.close()
+    calls = missing.calls()
+    check("the tab opens in the picker's directory under the vanished directory's name",
+          any(c.startswith(f"tab create --cwd {missing.context_cwd} --label {os.path.basename(cwd)} --no-focus")
+              for c in calls), calls)
+
+    missing.clear_calls()
+    codex_sid, codex_cwd = missing.codex[0]
+    shutil.rmtree(codex_cwd, ignore_errors=True)
+    env = missing.env()
+    subprocess.run([harness.PLUGIN + "/transcripts", "resume", codex_cwd, "codex:" + codex_sid],
+                   env=env, capture_output=True, text=True, cwd=env["HOME"])
+    check("a codex session whose directory is gone resumes from the picker's directory",
+          any(c.startswith(f"tab create --cwd {missing.context_cwd} ") for c in missing.calls()), missing.calls())
+
+    missing.clear_calls()
+    opencode_sid, opencode_cwd = missing.opencode[0]
+    shutil.rmtree(opencode_cwd, ignore_errors=True)
+    t = harness.Term([harness.PLUGIN + "/transcripts", "resume", opencode_cwd, "opencode:" + opencode_sid],
+                     missing.env(), cols=90, rows=22)
+    t.wait_idle()
+    check("an opencode session whose directory is gone still says so", "session directory missing" in t.text())
     t.close()
 
 
