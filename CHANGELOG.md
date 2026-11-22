@@ -4,17 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.3] - 2026-11-22
+## [1.3.2] - 2026-11-22
 
 ### Fixed
 
 - Exclude Claude tool calls that read or search Claude transcripts, along with
   their results, from search.
-
-## [1.3.2] - 2026-11-22
-
-### Fixed
-
 - Search Claude tool results, including code-mode REPL and Poll output, in the
   tools and everything scopes. Matching results carry the `tool` label.
 - Resume Claude and Codex sessions from the picker directory when the original
@@ -116,7 +111,6 @@ All notable changes to this project are documented here. The format follows
 - Diagnostics overlay (`Ctrl+D`) covering dependency versions, index state,
   session counts and Claude Code's `cleanupPeriodDays`, with a one-key fix.
 
-[1.3.3]: https://github.com/hxreborn/herdr-transcripts/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/hxreborn/herdr-transcripts/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/hxreborn/herdr-transcripts/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.2.0...v1.3.0
