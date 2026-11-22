@@ -44,7 +44,7 @@ CAP_TEXT = 120000
 CAP_TURNS = 200
 CAP_TURN_CHARS = 1000
 CAP_FILES = 100
-INDEX_VERSION = "v10"
+INDEX_VERSION = "v11"
 POOL_MIN_BYTES = 24 << 20
 
 R = "\033[0m"
@@ -342,16 +342,28 @@ def readonly_db(path):
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 
 
+CLAUDE_REPL_EVENT = re.compile(
+    r'<event (?:nonce="[^"]*" )?kind="repl-(?:eval|status)"(?=[ >])'
+)
+CLAUDE_REPL_EVAL = re.compile(
+    r'<event (?:nonce="[^"]*" )?kind="repl-eval"[^>]*\beval="(\d+)"[^>]*>'
+)
+CLAUDE_TRANSCRIPT_PATH = re.compile(r"\.claude/projects(?=/|[^\w.-]|$)")
+
+
 def parse_transcript(path, agent="claude", title=""):
     cwd = branch = ""
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     tool_results = {}
+    transcript_lookups, transcript_evals = set(), set()
     total = tool_total = 0
 
     def add_tool_result(text):
         nonlocal tool_total
         if tool_total >= CAP_TEXT:
+            return
+        if any(match[1] in transcript_evals for match in CLAUDE_REPL_EVAL.finditer(text)):
             return
         text = normalize(text, CAP_TURN_CHARS)
         if text and text not in tool_results:
@@ -373,7 +385,7 @@ def parse_transcript(path, agent="claude", title=""):
                     text = (json.loads(raw).get("content") or "").strip()
                 except Exception:
                     continue
-                if re.match(r'<event (?:nonce="[^"]*" )?kind="repl-(?:eval|status)"(?=[ >])', text):
+                if CLAUDE_REPL_EVENT.match(text):
                     add_tool_result(text)
                     continue
                 if text and not text.startswith(METADATA):
@@ -432,6 +444,11 @@ def parse_transcript(path, agent="claude", title=""):
                         (prompts if is_user else replies).append(normalize(text, 1000))
                         total += min(len(text), 1000)
                 elif kind == "tool_result" and is_user:
+                    if part.get("tool_use_id") in transcript_lookups:
+                        metadata = o.get("toolUseResult")
+                        if isinstance(metadata, dict) and metadata.get("evalId") is not None:
+                            transcript_evals.add(str(metadata["evalId"]))
+                        continue
                     result = part.get("content")
                     if isinstance(result, str):
                         add_tool_result(result)
@@ -439,10 +456,14 @@ def parse_transcript(path, agent="claude", title=""):
                         for block in result:
                             if isinstance(block, dict) and block.get("type") == "text":
                                 add_tool_result(block.get("text") or "")
-                elif kind == "tool_use" and total < CAP_TEXT:
-                    files += tool_files(part.get("input"))
-                    text = tool_args(part.get("input"))
-                    if text:
+                elif kind == "tool_use":
+                    given = part.get("input")
+                    if total < CAP_TEXT:
+                        files += tool_files(given)
+                    text = tool_args(given)
+                    if part.get("id") and CLAUDE_TRANSCRIPT_PATH.search(text):
+                        transcript_lookups.add(part["id"])
+                    elif text and total < CAP_TEXT:
                         tools.append(normalize(text, 300))
                         total += min(len(text), 300)
     entry, conversation = make_entry(title, cwd, branch, prompts, replies, tools, turns, files)

@@ -594,6 +594,20 @@ def write_session(root, home, index, spec):
                 {"type": "tool_result", "tool_use_id": "toolu_poll", "content":
                  '<system>authentic event nonces for this delivery: fixture</system>\n'
                  '<event nonce="fixture" kind="repl-eval" eval="5"><result>polloutputmarker</result></event>'}]}})
+            lines.extend([
+                {"type": "assistant", "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_lookup", "name": "REPL",
+                     "input": {"code": "await $`cat ~/.claude/projects/example/session.jsonl`.text()"}}]}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_lookup", "content": "(dispatched #6)"}]},
+                 "toolUseResult": {"evalId": 6, "asyncDispatched": True}},
+                {"type": "queue-operation", "operation": "enqueue", "sessionId": sid,
+                 "content": '<event kind="repl-eval" eval="6"><result>lookupechomarker</result></event>'},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_poll", "content":
+                     '<system>authentic event nonces for this delivery: fixture</system>\n'
+                     '<event nonce="fixture" kind="repl-eval" eval="6"><result>lookupechomarker</result></event>'}]}},
+            ])
             lines.append({"type": "queue-operation", "operation": "enqueue", "sessionId": sid,
                           "content": spec["queued"]})
             lines.append({"type": "queue-operation", "operation": "remove", "sessionId": sid,

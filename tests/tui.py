@@ -166,10 +166,10 @@ def picker_tests():
     t.send("\x15")
 
     for scope in ("conversation", "titles", "prompts", "replies", "tools", "everything"):
-        for query in ("evaloutputmarker", "statusoutputmarker", "polloutputmarker"):
+        for query in ("evaloutputmarker", "statusoutputmarker", "polloutputmarker", "lookupechomarker"):
             t.send(query)
             screen = t.text()
-            if scope in ("tools", "everything"):
+            if scope in ("tools", "everything") and query != "lookupechomarker":
                 check(f"{scope} shows {query} as tool output",
                       "tool ›" in screen and "you ›" not in screen, screen)
             else:
