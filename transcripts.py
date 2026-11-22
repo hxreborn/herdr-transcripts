@@ -44,7 +44,7 @@ CAP_TEXT = 120000
 CAP_TURNS = 200
 CAP_TURN_CHARS = 1000
 CAP_FILES = 100
-INDEX_VERSION = "v9"
+INDEX_VERSION = "v10"
 POOL_MIN_BYTES = 24 << 20
 
 R = "\033[0m"
@@ -346,7 +346,19 @@ def parse_transcript(path, agent="claude", title=""):
     cwd = branch = ""
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
-    total = 0
+    tool_results = {}
+    total = tool_total = 0
+
+    def add_tool_result(text):
+        nonlocal tool_total
+        if tool_total >= CAP_TEXT:
+            return
+        text = normalize(text, CAP_TURN_CHARS)
+        if text and text not in tool_results:
+            tools.append(text)
+            tool_results[text] = None
+            tool_total += len(text)
+
     with open(path, "rb") as fh:
         for raw in fh:
             head = raw[:400]
@@ -361,6 +373,9 @@ def parse_transcript(path, agent="claude", title=""):
                     text = (json.loads(raw).get("content") or "").strip()
                 except Exception:
                     continue
+                if re.match(r'<event (?:nonce="[^"]*" )?kind="repl-(?:eval|status)"(?=[ >])', text):
+                    add_tool_result(text)
+                    continue
                 if text and not text.startswith(METADATA):
                     turns.append(["you", normalize(text, CAP_TURN_CHARS)])
                     if total < CAP_TEXT:
@@ -369,7 +384,7 @@ def parse_transcript(path, agent="claude", title=""):
                 continue
             is_user = b'"type":"user"' in head or b'"role":"user"' in head
             is_assistant = b'"role":"assistant"' in head or b'"type":"assistant"' in head
-            if cwd and (b'"isSidechain":true' in head or (is_user and b'"type":"tool_result"' in raw[:1200])):
+            if cwd and b'"isSidechain":true' in head:
                 continue
             if not cwd and not is_user and b'"cwd":"' in raw[:600]:
                 try:
@@ -416,13 +431,22 @@ def parse_transcript(path, agent="claude", title=""):
                     if total < CAP_TEXT:
                         (prompts if is_user else replies).append(normalize(text, 1000))
                         total += min(len(text), 1000)
+                elif kind == "tool_result" and is_user:
+                    result = part.get("content")
+                    if isinstance(result, str):
+                        add_tool_result(result)
+                    elif isinstance(result, list):
+                        for block in result:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                add_tool_result(block.get("text") or "")
                 elif kind == "tool_use" and total < CAP_TEXT:
                     files += tool_files(part.get("input"))
                     text = tool_args(part.get("input"))
                     if text:
                         tools.append(normalize(text, 300))
                         total += min(len(text), 300)
-    return make_entry(title, cwd, branch, prompts, replies, tools, turns, files)
+    entry, conversation = make_entry(title, cwd, branch, prompts, replies, tools, turns, files)
+    return entry, conversation + [["tool", text] for text in tool_results]
 
 
 def make_entry(title, cwd, branch, prompts, replies, tools, turns, files=()):
@@ -1154,7 +1178,7 @@ def preview(uid, query):
     try:
         with open(turns_path(uid)) as fh:
             entry = json.load(fh)
-        turns = entry["turns"]
+        turns = [t for t in entry["turns"] if pattern or t[0] != "tool"]
     except Exception:
         print(f"{C['dim']}no transcript indexed for {uid}{R}")
         return
@@ -1171,6 +1195,10 @@ def preview(uid, query):
         print(touched)
     print()
     if pattern:
+        scope = read_settings()["scope"]
+        roles = {"prompts": {"you"}, "replies": {uid.partition(":")[0]}, "tools": {"tool"}}
+        turns = [t for t in turns if (scope not in roles or t[0] in roles[scope])
+                 and (t[0] != "tool" or scope in ("tools", "everything"))]
         hits = [t for t in turns if pattern.search(t[1])]
         if hits:
             print(f"{C['dim']}{len(hits)} of {plural(len(turns), 'message')} match{R}\n")

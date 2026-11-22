@@ -162,8 +162,20 @@ def picker_tests():
     check("task notifications never become prompts", "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
     t.send("\x15")
     t.send("toolnoise")
-    check("claude tool results are not indexed", "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
+    check("claude tool results are excluded from conversation", "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
     t.send("\x15")
+
+    for scope in ("conversation", "titles", "prompts", "replies", "tools", "everything"):
+        for query in ("evaloutputmarker", "statusoutputmarker", "polloutputmarker"):
+            t.send(query)
+            screen = t.text()
+            if scope in ("tools", "everything"):
+                check(f"{scope} shows {query} as tool output",
+                      "tool ›" in screen and "you ›" not in screen, screen)
+            else:
+                check(f"{scope} excludes {query}", "0/" in screen.split("\n")[2], screen)
+            t.send("\x15")
+        t.send("\t")
 
     t.send("kafka")
     check("blocked session says blocked", "● blocked" in t.text())
@@ -854,7 +866,7 @@ def droid_tests():
           "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
     t.send("\x15")
     t.send("toolnoise")
-    check("droid tool results and todo lists are not indexed",
+    check("droid tool results and todo lists are excluded from conversation",
           "0/" in t.text().split("\n")[2], t.text().split("\n")[2])
     t.send("\x15")
     t.send("\x1b")

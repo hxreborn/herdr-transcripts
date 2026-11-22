@@ -583,6 +583,17 @@ def write_session(root, home, index, spec):
                           "message": {"role": "user", "content": [
                               {"type": "tool_result", "tool_use_id": "toolu_1", "content": "toolnoise 3 passed"}]}})
         if n == 1 and spec.get("queued"):
+            for event in (
+                '<event kind="repl-eval" at="2026-11-22T16:58:55.704Z" eval="5" ms="156" status="settled">\n'
+                '<result>evaloutputmarker</result>\n</event>',
+                '<event kind="repl-status">statusoutputmarker</event>',
+            ):
+                lines.append({"type": "queue-operation", "operation": "enqueue", "sessionId": sid,
+                              "content": event})
+            lines.append({"type": "user", "cwd": cwd, "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_poll", "content":
+                 '<system>authentic event nonces for this delivery: fixture</system>\n'
+                 '<event nonce="fixture" kind="repl-eval" eval="5"><result>polloutputmarker</result></event>'}]}})
             lines.append({"type": "queue-operation", "operation": "enqueue", "sessionId": sid,
                           "content": spec["queued"]})
             lines.append({"type": "queue-operation", "operation": "remove", "sessionId": sid,
