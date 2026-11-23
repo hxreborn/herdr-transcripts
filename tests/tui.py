@@ -133,6 +133,39 @@ def unit_tests():
     check("the entry keeps one path past the cap so the preview can tell it was truncated",
           len(entry["files"]) == vb.CAP_FILES + 1, len(entry["files"]))
 
+    def compact(record):
+        return json.dumps(record, separators=(",", ":")) + "\n"
+
+    long_claude = os.path.join(scratch, "long-claude.jsonl")
+    with open(long_claude, "w") as fh:
+        fh.write(compact({"type": "user", "cwd": scratch, "isSidechain": False,
+                          "message": {"role": "user", "content": "start the long job"}}))
+        for n in range(600):
+            fh.write(compact({"type": "assistant", "isSidechain": False, "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": f"call{n}", "name": "Bash", "input": {"command": f"run step {n} " + "x" * 400}}]}}))
+        for n in range(200):
+            fh.write(compact({"type": "user", "isSidechain": False,
+                              "message": {"role": "user", "content": f"filler prompt {n} " + "y" * 1000}}))
+        fh.write(compact({"type": "user", "isSidechain": False,
+                          "message": {"role": "user", "content": "apply for the lighthouse keeper program"}}))
+    entry, _ = vb.parse_transcript(long_claude)
+    check("search finds a late Claude prompt after many tool calls and a long conversation",
+          "lighthouse keeper program" in entry["prompts"], entry["prompts"][-120:])
+
+    long_codex = os.path.join(scratch, "long-codex.jsonl")
+    with open(long_codex, "w") as fh:
+        for n in range(600):
+            fh.write(compact({"type": "response_item", "payload": {"type": "function_call", "name": "shell",
+                                                                   "arguments": f"step {n} " + "x" * 400}}))
+        for n in range(200):
+            fh.write(compact({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": f"filler prompt {n} " + "y" * 1000}]}}))
+        fh.write(compact({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "apply for the lighthouse keeper program"}]}}))
+    entry, _ = vb.parse_codex(long_codex)
+    check("search finds a late Codex prompt after many tool calls and a long conversation",
+          "lighthouse keeper program" in entry["prompts"], entry["prompts"][-120:])
+
 
 def picker_tests():
     print("picker")

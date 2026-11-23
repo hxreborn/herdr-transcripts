@@ -41,10 +41,11 @@ MIN_FZF = (0, 66, 0)
 RETENTION_TARGET = 3650
 
 CAP_TEXT = 120000
+CAP_CONVERSATION_TEXT = 1000000
 CAP_TURNS = 200
 CAP_TURN_CHARS = 1000
 CAP_FILES = 100
-INDEX_VERSION = "v11"
+INDEX_VERSION = "v12"
 POOL_MIN_BYTES = 24 << 20
 
 R = "\033[0m"
@@ -357,7 +358,7 @@ def parse_transcript(path, agent="claude", title=""):
     turns = deque(maxlen=CAP_TURNS)
     tool_results = {}
     transcript_lookups, transcript_evals = set(), set()
-    total = tool_total = 0
+    total = tool_total = args_total = 0
 
     def add_tool_result(text):
         nonlocal tool_total
@@ -390,7 +391,7 @@ def parse_transcript(path, agent="claude", title=""):
                     continue
                 if text and not text.startswith(METADATA):
                     turns.append(["you", normalize(text, CAP_TURN_CHARS)])
-                    if total < CAP_TEXT:
+                    if total < CAP_CONVERSATION_TEXT:
                         prompts.append(normalize(text, 1000))
                         total += min(len(text), 1000)
                 continue
@@ -440,7 +441,7 @@ def parse_transcript(path, agent="claude", title=""):
                     if not text or text.startswith(METADATA) or text.startswith("[Request interrupted"):
                         continue
                     turns.append(["you" if is_user else agent, normalize(text, CAP_TURN_CHARS)])
-                    if total < CAP_TEXT:
+                    if total < CAP_CONVERSATION_TEXT:
                         (prompts if is_user else replies).append(normalize(text, 1000))
                         total += min(len(text), 1000)
                 elif kind == "tool_result" and is_user:
@@ -458,14 +459,14 @@ def parse_transcript(path, agent="claude", title=""):
                                 add_tool_result(block.get("text") or "")
                 elif kind == "tool_use":
                     given = part.get("input")
-                    if total < CAP_TEXT:
+                    if args_total < CAP_TEXT:
                         files += tool_files(given)
                     text = tool_args(given)
                     if part.get("id") and CLAUDE_TRANSCRIPT_PATH.search(text):
                         transcript_lookups.add(part["id"])
-                    elif text and total < CAP_TEXT:
+                    elif text and args_total < CAP_TEXT:
                         tools.append(normalize(text, 300))
-                        total += min(len(text), 300)
+                        args_total += min(len(text), 300)
     entry, conversation = make_entry(title, cwd, branch, prompts, replies, tools, turns, files)
     return entry, conversation + [["tool", text] for text in tool_results]
 
@@ -538,7 +539,7 @@ def parse_codex(path):
     cwd = ""
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
-    total = 0
+    total = args_total = 0
     with open(path, "rb") as fh:
         for raw in fh:
             head = raw[:300]
@@ -565,9 +566,9 @@ def parse_codex(path):
                 continue
             if is_call:
                 text = f"{p.get('name') or ''} {p.get('arguments') or p.get('input') or ''}".strip()
-                if text and total < CAP_TEXT:
+                if text and args_total < CAP_TEXT:
                     tools.append(normalize(text, 300))
-                    total += min(len(text), 300)
+                    args_total += min(len(text), 300)
                 continue
             role = p.get("role")
             if role not in ("user", "assistant") or not isinstance(p.get("content"), list):
@@ -589,7 +590,7 @@ def parse_codex(path):
             if not text:
                 continue
             turns.append(["you" if role == "user" else "codex", normalize(text, CAP_TURN_CHARS)])
-            if total < CAP_TEXT:
+            if total < CAP_CONVERSATION_TEXT:
                 (prompts if role == "user" else replies).append(normalize(text, 1000))
                 total += min(len(text), 1000)
     title, branch = codex_threads().get(codex_sid(path), ("", ""))
@@ -618,21 +619,21 @@ def parse_opencode(path):
     db_path, _, sid = path.rpartition("/")
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
-    total = 0
+    total = args_total = 0
     db = readonly_db(db_path)
     title, cwd = db.execute("select title, directory from session where id = ?", (sid,)).fetchone()
     for message, data in db.execute(
             "select m.data, p.data from part p join message m on m.id = p.message_id"
             " where p.session_id = ? order by m.time_created, p.time_created, p.id", (sid,)):
         if data.startswith('{"type":"tool"'):
-            if total >= CAP_TEXT:
+            if args_total >= CAP_TEXT:
                 continue
             part = json.loads(data)
             files += tool_files((part.get("state") or {}).get("input"))
             text = tool_args((part.get("state") or {}).get("input"), part.get("tool") or "").strip()
             if text:
                 tools.append(normalize(text, 300))
-                total += min(len(text), 300)
+                args_total += min(len(text), 300)
             continue
         if not data.startswith('{"type":"text"'):
             continue
@@ -642,7 +643,7 @@ def parse_opencode(path):
             continue
         is_user = '"role":"user"' in message
         turns.append(["you" if is_user else "opencode", normalize(text, CAP_TURN_CHARS)])
-        if total < CAP_TEXT:
+        if total < CAP_CONVERSATION_TEXT:
             (prompts if is_user else replies).append(normalize(text, 1000))
             total += min(len(text), 1000)
     db.close()
@@ -687,7 +688,7 @@ def parse_copilot(path):
     cwd = branch = ""
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
-    total = 0
+    total = args_total = 0
     with open(path, "rb") as fh:
         for raw in fh:
             head = raw[:64]
@@ -708,15 +709,15 @@ def parse_copilot(path):
             text = (data.get("content") or "").strip()
             if text:
                 turns.append(["you" if is_user else "copilot", normalize(text, CAP_TURN_CHARS)])
-                if total < CAP_TEXT:
+                if total < CAP_CONVERSATION_TEXT:
                     (prompts if is_user else replies).append(normalize(text, 1000))
                     total += min(len(text), 1000)
             for call in data.get("toolRequests") or []:
                 files += tool_files(call.get("arguments") if isinstance(call, dict) else None)
                 text = tool_args(call.get("arguments") if isinstance(call, dict) else None)
-                if text and total < CAP_TEXT:
+                if text and args_total < CAP_TEXT:
                     tools.append(normalize(text, 300))
-                    total += min(len(text), 300)
+                    args_total += min(len(text), 300)
     workspace = copilot_workspace(path)
     return make_entry(workspace.get("summary", ""), cwd or workspace.get("cwd", ""),
                       branch or workspace.get("branch", ""), prompts, replies, tools, turns, files)
@@ -811,7 +812,7 @@ def parse_gemini(path):
     cwd = project_cwd(path) if (meta.get("kind") or "main") == "main" else ""
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
-    total = 0
+    total = args_total = 0
     for message in messages:
         if not isinstance(message, dict):
             continue
@@ -831,18 +832,18 @@ def parse_gemini(path):
             if text and not text.startswith(GEMINI_NOISE):
                 texts.append(text)
         for call in message.get("toolCalls") or []:
-            if not isinstance(call, dict) or total >= CAP_TEXT:
+            if not isinstance(call, dict) or args_total >= CAP_TEXT:
                 continue
             files += tool_files(call.get("args"))
             text = tool_args(call.get("args"), str(call.get("name") or "")).strip()
             if text:
                 tools.append(normalize(text, 300))
-                total += min(len(text), 300)
+                args_total += min(len(text), 300)
         text = " ".join(texts)
         if not text:
             continue
         turns.append(["you" if kind == "user" else "gemini", normalize(text, CAP_TURN_CHARS)])
-        if total < CAP_TEXT:
+        if total < CAP_CONVERSATION_TEXT:
             (prompts if kind == "user" else replies).append(normalize(text, 1000))
             total += min(len(text), 1000)
     return hashed_entry(meta.get("summary") or "", cwd, "", prompts, replies, tools, turns, files)
@@ -852,7 +853,7 @@ def parse_qwen(path):
     cwd = branch = ""
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
-    total = 0
+    total = args_total = 0
     with open(path, "rb") as fh:
         for raw in fh:
             head = raw[:400]
@@ -879,9 +880,9 @@ def parse_qwen(path):
                 if isinstance(call, dict):
                     files += tool_files(call.get("args"))
                     text = tool_args(call.get("args"), str(call.get("name") or "")).strip()
-                    if text and total < CAP_TEXT:
+                    if text and args_total < CAP_TEXT:
                         tools.append(normalize(text, 300))
-                        total += min(len(text), 300)
+                        args_total += min(len(text), 300)
                     continue
                 text = (part.get("text") or "").strip()
                 if text:
@@ -890,7 +891,7 @@ def parse_qwen(path):
             if not text:
                 continue
             turns.append(["you" if is_user else "qwen", normalize(text, CAP_TURN_CHARS)])
-            if total < CAP_TEXT:
+            if total < CAP_CONVERSATION_TEXT:
                 (prompts if is_user else replies).append(normalize(text, 1000))
                 total += min(len(text), 1000)
     return make_entry("", cwd, branch, prompts, replies, tools, turns, files)
@@ -904,7 +905,7 @@ def parse_kimi(path):
     cwd = project_cwd(path)
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
-    total = 0
+    total = args_total = 0
     with open(path, "rb") as fh:
         for raw in fh:
             head = raw[:32]
@@ -931,18 +932,18 @@ def parse_kimi(path):
                     texts.append(text)
             for call in o.get("tool_calls") or []:
                 given = call.get("function") if isinstance(call, dict) else None
-                if not isinstance(given, dict) or total >= CAP_TEXT:
+                if not isinstance(given, dict) or args_total >= CAP_TEXT:
                     continue
                 files += tool_files(given.get("arguments"))
                 text = f"{given.get('name') or ''} {given.get('arguments') or ''}".strip()
                 if text:
                     tools.append(normalize(text, 300))
-                    total += min(len(text), 300)
+                    args_total += min(len(text), 300)
             text = " ".join(texts)
             if not text:
                 continue
             turns.append(["you" if role == "user" else "kimi", normalize(text, CAP_TURN_CHARS)])
-            if total < CAP_TEXT:
+            if total < CAP_CONVERSATION_TEXT:
                 (prompts if role == "user" else replies).append(normalize(text, 1000))
                 total += min(len(text), 1000)
     return hashed_entry("", cwd, "", prompts, replies, tools, turns, files)
@@ -996,7 +997,7 @@ def parse_jobs(jobs, nbytes):
     import concurrent.futures
     import multiprocessing
     context = multiprocessing.get_context("fork" if sys.platform == "linux" else None)
-    return concurrent.futures.ProcessPoolExecutor(mp_context=context).map(parse_job, jobs)
+    return concurrent.futures.ProcessPoolExecutor(max_workers=2, mp_context=context).map(parse_job, jobs)
 
 
 def turns_path(uid):
