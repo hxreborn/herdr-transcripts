@@ -2,6 +2,7 @@
 
 import fcntl
 import glob
+import hashlib
 import json
 import marshal
 import os
@@ -915,9 +916,16 @@ def agy_meta():
         try:
             import sqlite3
             import urllib.parse
-            db = sqlite3.connect(f"file:{AGY_SUMMARIES}?mode=ro&immutable=1", uri=True)
-            for cid, title, uris, depth in db.execute(
-                    "select conversation_id, title, workspace_uris, nesting_depth from conversation_summaries"):
+            where = urllib.parse.quote(AGY_SUMMARIES)
+            try:  # read-only and lock-aware, so rows agy is writing (WAL) are seen and never disturbed
+                db = sqlite3.connect(f"file:{where}?mode=ro", uri=True)
+                rows = db.execute("select conversation_id, title, workspace_uris, nesting_depth "
+                                  "from conversation_summaries").fetchall()
+            except sqlite3.Error:  # no -shm/-wal access: fall back to a snapshot of the main file
+                db = sqlite3.connect(f"file:{where}?mode=ro&immutable=1", uri=True)
+                rows = db.execute("select conversation_id, title, workspace_uris, nesting_depth "
+                                  "from conversation_summaries").fetchall()
+            for cid, title, uris, depth in rows:
                 cwd = ""
                 try:
                     first = (json.loads(uris or "[]") or [""])[0]
@@ -925,11 +933,21 @@ def agy_meta():
                     cwd = urllib.parse.unquote(parsed.path) if parsed.scheme == "file" else ""
                 except Exception:
                     pass
-                AGY_META[cid] = (title or "", cwd, depth or 0)
+                AGY_META[cid] = (title if isinstance(title, str) else "", cwd,
+                                 depth if isinstance(depth, int) else 0)
             db.close()
         except Exception:
             pass
     return AGY_META
+
+
+def agy_scan(provider, spec):
+    """Like glob_scan, with the summary row in the cache key: a title or folder agy writes after
+    the transcript was indexed makes that one conversation reparse."""
+    meta = agy_meta()
+    for mtime, size, uid, path, key in glob_scan(provider, spec):
+        title, cwd, depth = meta.get(uid.partition(":")[2], ("", "", 0))
+        yield mtime, size, uid, path, f"{key}:{hashlib.sha1(f'{title}|{cwd}|{depth}'.encode()).hexdigest()[:8]}"
 
 
 def parse_agy(path):
@@ -948,14 +966,17 @@ def parse_agy(path):
                 o = json.loads(raw)
             except Exception:
                 continue
-            kind = o.get("type") if isinstance(o, dict) else None
+            if not isinstance(o, dict):
+                continue
+            kind = o.get("type")
             if kind == "GENERIC":
-                text = normalize(o.get("content") or "", 300)
+                text = normalize(o["content"], 300) if isinstance(o.get("content"), str) else ""
                 if text and tool_total < CAP_TEXT:
                     tools.append(text)
                     tool_total += len(text)
                 continue
-            for call in o.get("tool_calls") or []:
+            calls = o.get("tool_calls")
+            for call in calls if isinstance(calls, list) else []:
                 if isinstance(call, dict) and tool_total < CAP_TEXT:
                     args = call.get("args") if isinstance(call.get("args"), dict) else {}
                     files += tool_files(args)
@@ -1054,7 +1075,7 @@ PROVIDERS = {
              "flags": {"skip_permissions": ("--yolo",)},
              "install": "npm install -g @qwen-code/qwen-code"},
     "agy": {"root": AGY_BRAIN, "files": os.path.join(AGY_BRAIN, "*", ".system_generated", "logs", "transcript_full.jsonl"),
-            "sid": agy_sid, "parse": parse_agy, "resume": ("agy", "--conversation", "{sid}"),
+            "sid": agy_sid, "parse": parse_agy, "scan": agy_scan, "resume": ("agy", "--conversation", "{sid}"),
             "install": "install the Antigravity CLI (agy)"},
     "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
              "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"),

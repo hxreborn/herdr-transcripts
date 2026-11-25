@@ -107,6 +107,25 @@ def main():
     preview = run(sb, "preview", "agy:" + TITLED, "").stdout
     check("the preview labels who asked", "you ›" in preview and "plan the quokka migration" in preview, preview[:400])
     check("the preview labels who answered", "agy ›" in preview and "three steps" in preview, preview[:400])
+    late = "aaaaaaaa-0000-4000-8000-000000000004"
+    base = os.path.join(sb.root, ".gemini", "antigravity-cli")
+    logs = os.path.join(base, "brain", late, ".system_generated", "logs")
+    os.makedirs(logs, exist_ok=True)
+    with open(os.path.join(logs, "transcript_full.jsonl"), "w") as fh:
+        fh.write('[1, 2]\n{"type":"USER_INPUT","content":["not","text"]}\n'
+                 '{"type":"PLANNER_RESPONSE","tool_calls":"oops","content":"echidna reply"}\n'
+                 '{"type":"USER_INPUT","source":"USER_EXPLICIT","content":"echidna question"}\n')
+    before = run(sb, "list").stdout
+    check("a conversation without its summary row yet is not listed", "echidna question" not in before)
+    db = sqlite3.connect(os.path.join(base, "conversation_summaries.db"))
+    db.execute("insert into conversation_summaries values (?, 'Echidna notes', '', 2, '2026-11-20', ?, 0)",
+               (late, json.dumps(["file://" + urllib.parse.quote(cwd)])))
+    db.commit()
+    db.close()
+    after = run(sb, "list").stdout
+    check("its summary row arriving later lists it without touching the transcript", "Echidna notes" in after,
+          after[:300])
+    check("malformed lines are skipped, the session kept", "echidna question" in after or "Echidna notes" in after)
     plan = run(sb, "resume", cwd, "agy:" + TITLED, TRANSCRIPTS_DRY_RUN="1", HERDR_PLUGIN_ROOT="").stdout.strip()
     check("agy resumes with --conversation", plan.endswith(f"agy --conversation {TITLED}"), plan)
     print()
