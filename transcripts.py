@@ -1637,8 +1637,12 @@ def diagnose_lines():
     out.append("")
 
     section("Transcripts")
-    for provider in PROVIDERS:
-        row(f"{provider} sessions", str(sum(1 for f in every if f[2].startswith(provider + ":"))))
+    counts = {provider: sum(1 for f in every if f[2].startswith(provider + ":")) for provider in PROVIDERS}
+    for provider, count in counts.items():
+        if count:  # agents with no sessions on this machine would only push the index off screen
+            row(f"{provider} sessions", str(count))
+    if not any(counts.values()):
+        row("sessions", "0")
     row("directories", str(len({e["cwd"] for e in entries.values() if e.get("cwd")})) if entries else "not indexed yet")
     row("total size", human_size(sum(f[1] for f in every)))
     if ages:
