@@ -897,6 +897,83 @@ def parse_qwen(path):
     return make_entry("", cwd, branch, prompts, replies, tools, turns, files)
 
 
+AGY_HOME = os.path.join(HOME, ".gemini", "antigravity-cli")
+AGY_BRAIN = os.path.join(AGY_HOME, "brain")
+AGY_SUMMARIES = os.path.join(AGY_HOME, "conversation_summaries.db")
+AGY_META = {}
+AGY_KEEP = (b'"type":"USER_INPUT"', b'"type":"PLANNER_RESPONSE"', b'"type":"GENERIC"')
+
+
+def agy_sid(path):
+    return path.split(os.sep)[-4]
+
+
+def agy_meta():
+    """conversation id -> (title, cwd, nesting depth) from agy's own summaries database."""
+    if not AGY_META:
+        AGY_META[None] = None
+        try:
+            import sqlite3
+            import urllib.parse
+            db = sqlite3.connect(f"file:{AGY_SUMMARIES}?mode=ro&immutable=1", uri=True)
+            for cid, title, uris, depth in db.execute(
+                    "select conversation_id, title, workspace_uris, nesting_depth from conversation_summaries"):
+                cwd = ""
+                try:
+                    first = (json.loads(uris or "[]") or [""])[0]
+                    parsed = urllib.parse.urlparse(first)
+                    cwd = urllib.parse.unquote(parsed.path) if parsed.scheme == "file" else ""
+                except Exception:
+                    pass
+                AGY_META[cid] = (title or "", cwd, depth or 0)
+            db.close()
+        except Exception:
+            pass
+    return AGY_META
+
+
+def parse_agy(path):
+    title, cwd, depth = agy_meta().get(agy_sid(path), ("", "", 0))
+    if depth:
+        return make_entry("", "", "", [], [], [], [], ())  # a subagent run: indexed, never listed
+    prompts, replies, tools, files = [], [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = tool_total = 0
+    with open(path, "rb") as fh:
+        for raw in fh:
+            head = raw[:240]
+            if not any(mark in head for mark in AGY_KEEP):
+                continue
+            try:
+                o = json.loads(raw)
+            except Exception:
+                continue
+            kind = o.get("type") if isinstance(o, dict) else None
+            if kind == "GENERIC":
+                text = normalize(o.get("content") or "", 300)
+                if text and tool_total < CAP_TEXT:
+                    tools.append(text)
+                    tool_total += len(text)
+                continue
+            for call in o.get("tool_calls") or []:
+                if isinstance(call, dict) and tool_total < CAP_TEXT:
+                    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                    files += tool_files(args)
+                    text = normalize(tool_args(args, call.get("name") or ""), 300)
+                    if text:
+                        tools.append(text)
+                        tool_total += len(text)
+            text = (o.get("content") or "").strip() if isinstance(o.get("content"), str) else ""
+            if not text:
+                continue
+            role = "you" if kind == "USER_INPUT" else "agy"
+            turns.append([role, normalize(text, CAP_TURN_CHARS)])
+            if total < CAP_CONVERSATION_TEXT:
+                (prompts if role == "you" else replies).append(normalize(text, 1000))
+                total += min(len(text), 1000)
+    return make_entry(title, cwd, "", prompts, replies, tools, turns, files)
+
+
 def kimi_sid(path):
     return os.path.basename(os.path.dirname(path))
 
@@ -976,6 +1053,9 @@ PROVIDERS = {
              "sid": jsonl_sid, "parse": parse_qwen, "resume": ("qwen", "--resume", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},
              "install": "npm install -g @qwen-code/qwen-code"},
+    "agy": {"root": AGY_BRAIN, "files": os.path.join(AGY_BRAIN, "*", ".system_generated", "logs", "transcript_full.jsonl"),
+            "sid": agy_sid, "parse": parse_agy, "resume": ("agy", "--conversation", "{sid}"),
+            "install": "install the Antigravity CLI (agy)"},
     "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
              "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},

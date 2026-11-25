@@ -30,3 +30,4 @@ jobs:
       - run: fzf --version
       - run: python -m py_compile transcripts.py
       - run: tests/tui.py
+      - run: tests/agy.py
