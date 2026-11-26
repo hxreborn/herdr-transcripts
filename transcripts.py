@@ -897,6 +897,78 @@ def parse_qwen(path):
     return make_entry("", cwd, branch, prompts, replies, tools, turns, files)
 
 
+DEVIN_HOME = os.path.join(HOME, ".local", "share", "devin", "cli")
+DEVIN_DB = os.path.join(DEVIN_HOME, "sessions.db")
+
+
+def devin_scan(provider, spec):
+    """Devin keeps every session in one SQLite database. The cache key is the session's last
+    activity and message count (a covering-index count, fast even on a multi-GB file); the
+    size is not cheap to get, so it is 0."""
+    try:
+        db = readonly_db(DEVIN_DB)
+        counts = dict(db.execute("select session_id, count(*) from message_nodes group by session_id"))
+        sessions = db.execute("select id, last_activity_at from sessions where coalesce(hidden, 0) = 0").fetchall()
+        db.close()
+    except Exception:
+        return []
+    found = []
+    for sid, active in sessions:
+        count = counts.get(sid) or 0
+        if not count:
+            continue
+        found.append((float(active or 0), 0, f"{provider}:{sid}", f"{DEVIN_DB}/{sid}",
+                      f"{INDEX_VERSION}:{active}:{count}"))
+    return found
+
+
+def parse_devin(path):
+    db_path, _, sid = path.rpartition("/")
+    prompts, replies, tools, files = [], [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = tool_total = 0
+    db = readonly_db(db_path)
+    row = db.execute("select title, working_directory from sessions where id = ?", (sid,)).fetchone() or ("", "")
+    title, cwd = row[0] or "", row[1] or ""
+    for (raw,) in db.execute("select chat_message from message_nodes where session_id = ? order by created_at, row_id",
+                             (sid,)):
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(o, dict):
+            continue
+        role, content = o.get("role"), o.get("content")
+        text = content.strip() if isinstance(content, str) else ""
+        if role == "tool":
+            if text and tool_total < CAP_TEXT:
+                tools.append(normalize(text, 300))
+                tool_total += min(len(text), 300)
+            continue
+        calls = o.get("tool_calls")
+        for call in calls if isinstance(calls, list) else []:
+            given = call.get("function") if isinstance(call, dict) else None
+            if not isinstance(given, dict) or tool_total >= CAP_TEXT:
+                continue
+            files += tool_files(given.get("arguments"))
+            line = normalize(f"{given.get('name') or ''} {given.get('arguments') or ''}", 300)
+            if line:
+                tools.append(line)
+                tool_total += len(line)
+        meta = o.get("metadata") if isinstance(o.get("metadata"), dict) else {}
+        if role == "user" and meta.get("is_user_input") is not True:
+            continue  # system reminders and other injected user messages are not the user's prompts
+        if role not in ("user", "assistant") or not text:
+            continue
+        who = "you" if role == "user" else "devin"
+        turns.append([who, normalize(text, CAP_TURN_CHARS)])
+        if total < CAP_CONVERSATION_TEXT:
+            (prompts if who == "you" else replies).append(normalize(text, 1000))
+            total += min(len(text), 1000)
+    db.close()
+    return make_entry(title, cwd, "", prompts, replies, tools, turns, files)
+
+
 def kimi_sid(path):
     return os.path.basename(os.path.dirname(path))
 
@@ -976,6 +1048,9 @@ PROVIDERS = {
              "sid": jsonl_sid, "parse": parse_qwen, "resume": ("qwen", "--resume", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},
              "install": "npm install -g @qwen-code/qwen-code"},
+    "devin": {"root": DEVIN_HOME, "scan": devin_scan, "parse": parse_devin,
+              "resume": ("devin", "--resume", "{sid}"), "resumes_from_any_cwd": True,
+              "install": "install the Devin CLI"},
     "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
              "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},
