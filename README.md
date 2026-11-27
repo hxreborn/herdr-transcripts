@@ -27,8 +27,8 @@ by title, prompt, reply or tool call.
 [Droid](https://factory.ai),
 [Copilot CLI](https://github.com/github/copilot-cli),
 [Kimi Code](https://github.com/MoonshotAI/kimi-cli),
-[Qwen Code](https://github.com/QwenLM/qwen-code) and the Devin CLI (`~/.local/share/devin/cli/sessions.db`,
-read-only; hidden sessions and injected user messages are left out).
+[Qwen Code](https://github.com/QwenLM/qwen-code) and
+[Devin CLI](https://devin.ai/cli).
 
 `Ctrl+X` toggles each agent's own skip-permissions flag, `--yolo`,
 `--allow-all-tools` or `--auto high` as the agent spells it. `Ctrl+D` shows

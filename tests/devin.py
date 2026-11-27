@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Headless checks for the Devin CLI reader. Synthetic fixtures only."""
 
 import json
 import os
@@ -122,6 +121,12 @@ def main():
     run(sb, "list")
     preview = run(sb, "preview", "devin:" + MAIN, "").stdout
     check("a new message reaches the index", "refund path" in preview, preview[:400])
+    db = sqlite3.connect(db_path)
+    db.execute("update sessions set title = 'Platypus refunds' where id = ?", (MAIN,))
+    db.commit()
+    db.close()
+    rows = run(sb, "list").stdout
+    check("a later title reaches the index", "Platypus refunds" in rows, rows[:300])
     plan = run(sb, "resume", cwd, "devin:" + MAIN, TRANSCRIPTS_DRY_RUN="1", HERDR_PLUGIN_ROOT="").stdout.strip()
     check("devin resumes with --resume", plan.endswith(f"devin --resume {MAIN}"), plan)
     print()

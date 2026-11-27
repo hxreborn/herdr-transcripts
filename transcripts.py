@@ -902,23 +902,21 @@ DEVIN_DB = os.path.join(DEVIN_HOME, "sessions.db")
 
 
 def devin_scan(provider, spec):
-    """Devin keeps every session in one SQLite database. The cache key is the session's last
-    activity and message count (a covering-index count, fast even on a multi-GB file); the
-    size is not cheap to get, so it is 0."""
     try:
         db = readonly_db(DEVIN_DB)
         counts = dict(db.execute("select session_id, count(*) from message_nodes group by session_id"))
-        sessions = db.execute("select id, last_activity_at from sessions where coalesce(hidden, 0) = 0").fetchall()
+        sessions = db.execute("select id, last_activity_at, main_chain_id, working_directory, title from sessions"
+                              " where coalesce(hidden, 0) = 0").fetchall()
         db.close()
     except Exception:
         return []
     found = []
-    for sid, active in sessions:
+    for sid, active, tip, cwd, title in sessions:
         count = counts.get(sid) or 0
         if not count:
             continue
         found.append((float(active or 0), 0, f"{provider}:{sid}", f"{DEVIN_DB}/{sid}",
-                      f"{INDEX_VERSION}:{active}:{count}"))
+                      f"{INDEX_VERSION}:{active}:{count}:{tip}:{cwd}:{title}"))
     return found
 
 
@@ -971,7 +969,7 @@ def parse_devin(path):
                 tool_total += len(line)
         meta = o.get("metadata") if isinstance(o.get("metadata"), dict) else {}
         if role == "user" and meta.get("is_user_input") is not True:
-            continue  # system reminders and other injected user messages are not the user's prompts
+            continue
         if role not in ("user", "assistant") or not text:
             continue
         who = "you" if role == "user" else "devin"
@@ -1064,7 +1062,7 @@ PROVIDERS = {
              "install": "npm install -g @qwen-code/qwen-code"},
     "devin": {"root": DEVIN_HOME, "scan": devin_scan, "parse": parse_devin,
               "resume": ("devin", "--resume", "{sid}"), "resumes_from_any_cwd": True,
-              "install": "install the Devin CLI"},
+              "install": "curl -fsSL https://cli.devin.ai/install.sh | bash"},
     "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
              "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},
@@ -1648,7 +1646,7 @@ def diagnose_lines():
     section("Transcripts")
     counts = {provider: sum(1 for f in every if f[2].startswith(provider + ":")) for provider in PROVIDERS}
     for provider, count in counts.items():
-        if count:  # agents with no sessions on this machine would only push the index off screen
+        if count:
             row(f"{provider} sessions", str(count))
     if not any(counts.values()):
         row("sessions", "0")
