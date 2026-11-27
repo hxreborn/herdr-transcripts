@@ -981,6 +981,103 @@ def parse_devin(path):
     return make_entry(title, cwd, "", prompts, replies, tools, turns, files)
 
 
+AGY_HOME = os.path.join(HOME, ".gemini", "antigravity-cli")
+AGY_BRAIN = os.path.join(AGY_HOME, "brain")
+AGY_SUMMARIES = os.path.join(AGY_HOME, "conversation_summaries.db")
+AGY_META = {}
+AGY_KEEP = (b'"type":"USER_INPUT"', b'"type":"PLANNER_RESPONSE"', b'"type":"GENERIC"')
+
+
+def agy_sid(path):
+    return path.split(os.sep)[-4]
+
+
+def agy_meta():
+    if not AGY_META:
+        AGY_META[None] = None
+        if not os.path.exists(AGY_SUMMARIES):
+            return AGY_META
+        try:
+            import sqlite3
+            import urllib.parse
+            where = urllib.parse.quote(AGY_SUMMARIES)
+            try:
+                db = sqlite3.connect(f"file:{where}?mode=ro", uri=True)
+                rows = db.execute("select conversation_id, title, workspace_uris, nesting_depth "
+                                  "from conversation_summaries").fetchall()
+            except sqlite3.Error:
+                db = sqlite3.connect(f"file:{where}?mode=ro&immutable=1", uri=True)
+                rows = db.execute("select conversation_id, title, workspace_uris, nesting_depth "
+                                  "from conversation_summaries").fetchall()
+            for cid, title, uris, depth in rows:
+                cwd = ""
+                try:
+                    first = (json.loads(uris or "[]") or [""])[0]
+                    parsed = urllib.parse.urlparse(first)
+                    cwd = urllib.parse.unquote(parsed.path) if parsed.scheme == "file" else ""
+                except Exception:
+                    pass
+                AGY_META[cid] = (title if isinstance(title, str) else "", cwd,
+                                 depth if isinstance(depth, int) else 0)
+            db.close()
+        except Exception:
+            pass
+    return AGY_META
+
+
+def agy_scan(provider, spec):
+    import hashlib
+    meta = agy_meta()
+    for mtime, size, uid, path, key in glob_scan(provider, spec):
+        title, cwd, depth = meta.get(uid.partition(":")[2], ("", "", 0))
+        yield mtime, size, uid, path, f"{key}:{hashlib.sha1(f'{title}|{cwd}|{depth}'.encode()).hexdigest()[:8]}"
+
+
+def parse_agy(path):
+    title, cwd, depth = agy_meta().get(agy_sid(path), ("", "", 0))
+    if depth:
+        return make_entry("", "", "", [], [], [], [], ())
+    prompts, replies, tools, files = [], [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = tool_total = 0
+    with open(path, "rb") as fh:
+        for raw in fh:
+            head = raw[:240]
+            if not any(mark in head for mark in AGY_KEEP):
+                continue
+            try:
+                o = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(o, dict):
+                continue
+            kind = o.get("type")
+            if kind == "GENERIC":
+                text = normalize(o["content"], 300) if isinstance(o.get("content"), str) else ""
+                if text and tool_total < CAP_TEXT:
+                    tools.append(text)
+                    tool_total += len(text)
+                continue
+            calls = o.get("tool_calls")
+            for call in calls if isinstance(calls, list) else []:
+                if isinstance(call, dict) and tool_total < CAP_TEXT:
+                    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                    files += tool_files(args)
+                    text = normalize(tool_args(args, str(call.get("name") or "")), 300)
+                    if text:
+                        tools.append(text)
+                        tool_total += len(text)
+            text = (o.get("content") or "").strip() if isinstance(o.get("content"), str) else ""
+            if not text:
+                continue
+            role = "you" if kind == "USER_INPUT" else "agy"
+            turns.append([role, normalize(text, CAP_TURN_CHARS)])
+            if total < CAP_CONVERSATION_TEXT:
+                (prompts if role == "you" else replies).append(normalize(text, 1000))
+                total += min(len(text), 1000)
+    return make_entry(title, cwd, "", prompts, replies, tools, turns, files)
+
+
 def kimi_sid(path):
     return os.path.basename(os.path.dirname(path))
 
@@ -1063,6 +1160,9 @@ PROVIDERS = {
     "devin": {"root": DEVIN_HOME, "scan": devin_scan, "parse": parse_devin,
               "resume": ("devin", "--resume", "{sid}"), "resumes_from_any_cwd": True,
               "install": "curl -fsSL https://cli.devin.ai/install.sh | bash"},
+    "agy": {"root": AGY_BRAIN, "files": os.path.join(AGY_BRAIN, "*", ".system_generated", "logs", "transcript_full.jsonl"),
+            "sid": agy_sid, "parse": parse_agy, "scan": agy_scan, "resume": ("agy", "--conversation", "{sid}"),
+            "install": "curl -fsSL https://antigravity.google/cli/install.sh | bash"},
     "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
              "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},
