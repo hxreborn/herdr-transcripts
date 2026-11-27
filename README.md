@@ -27,7 +27,8 @@ by title, prompt, reply or tool call.
 [Droid](https://factory.ai),
 [Copilot CLI](https://github.com/github/copilot-cli),
 [Kimi Code](https://github.com/MoonshotAI/kimi-cli),
-[Qwen Code](https://github.com/QwenLM/qwen-code) and
+[Qwen Code](https://github.com/QwenLM/qwen-code),
+[Devin CLI](https://devin.ai/cli) and
 [Antigravity CLI](https://antigravity.google/docs/cli).
 
 `Ctrl+X` toggles each agent's own skip-permissions flag, `--yolo`,
