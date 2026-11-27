@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Headless checks for the Antigravity CLI (agy) reader. Synthetic fixtures only."""
 
 import json
 import os
@@ -114,6 +113,7 @@ def main():
     with open(os.path.join(logs, "transcript_full.jsonl"), "w") as fh:
         fh.write('[1, 2]\n{"type":"USER_INPUT","content":["not","text"]}\n'
                  '{"type":"PLANNER_RESPONSE","tool_calls":"oops","content":"echidna reply"}\n'
+                 '{"type":"PLANNER_RESPONSE","tool_calls":[{"name":7,"args":{}}],"content":"echidna count"}\n'
                  '{"type":"USER_INPUT","source":"USER_EXPLICIT","content":"echidna question"}\n')
     before = run(sb, "list").stdout
     check("a conversation without its summary row yet is not listed", "echidna question" not in before)

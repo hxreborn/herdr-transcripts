@@ -2,7 +2,6 @@
 
 import fcntl
 import glob
-import hashlib
 import json
 import marshal
 import os
@@ -910,18 +909,19 @@ def agy_sid(path):
 
 
 def agy_meta():
-    """conversation id -> (title, cwd, nesting depth) from agy's own summaries database."""
     if not AGY_META:
         AGY_META[None] = None
+        if not os.path.exists(AGY_SUMMARIES):
+            return AGY_META
         try:
             import sqlite3
             import urllib.parse
             where = urllib.parse.quote(AGY_SUMMARIES)
-            try:  # read-only and lock-aware, so rows agy is writing (WAL) are seen and never disturbed
+            try:
                 db = sqlite3.connect(f"file:{where}?mode=ro", uri=True)
                 rows = db.execute("select conversation_id, title, workspace_uris, nesting_depth "
                                   "from conversation_summaries").fetchall()
-            except sqlite3.Error:  # no -shm/-wal access: fall back to a snapshot of the main file
+            except sqlite3.Error:
                 db = sqlite3.connect(f"file:{where}?mode=ro&immutable=1", uri=True)
                 rows = db.execute("select conversation_id, title, workspace_uris, nesting_depth "
                                   "from conversation_summaries").fetchall()
@@ -942,8 +942,7 @@ def agy_meta():
 
 
 def agy_scan(provider, spec):
-    """Like glob_scan, with the summary row in the cache key: a title or folder agy writes after
-    the transcript was indexed makes that one conversation reparse."""
+    import hashlib
     meta = agy_meta()
     for mtime, size, uid, path, key in glob_scan(provider, spec):
         title, cwd, depth = meta.get(uid.partition(":")[2], ("", "", 0))
@@ -953,7 +952,7 @@ def agy_scan(provider, spec):
 def parse_agy(path):
     title, cwd, depth = agy_meta().get(agy_sid(path), ("", "", 0))
     if depth:
-        return make_entry("", "", "", [], [], [], [], ())  # a subagent run: indexed, never listed
+        return make_entry("", "", "", [], [], [], [], ())
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = tool_total = 0
@@ -980,7 +979,7 @@ def parse_agy(path):
                 if isinstance(call, dict) and tool_total < CAP_TEXT:
                     args = call.get("args") if isinstance(call.get("args"), dict) else {}
                     files += tool_files(args)
-                    text = normalize(tool_args(args, call.get("name") or ""), 300)
+                    text = normalize(tool_args(args, str(call.get("name") or "")), 300)
                     if text:
                         tools.append(text)
                         tool_total += len(text)
@@ -1076,7 +1075,7 @@ PROVIDERS = {
              "install": "npm install -g @qwen-code/qwen-code"},
     "agy": {"root": AGY_BRAIN, "files": os.path.join(AGY_BRAIN, "*", ".system_generated", "logs", "transcript_full.jsonl"),
             "sid": agy_sid, "parse": parse_agy, "scan": agy_scan, "resume": ("agy", "--conversation", "{sid}"),
-            "install": "install the Antigravity CLI (agy)"},
+            "install": "curl -fsSL https://antigravity.google/cli/install.sh | bash"},
     "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
              "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},
@@ -1660,7 +1659,7 @@ def diagnose_lines():
     section("Transcripts")
     counts = {provider: sum(1 for f in every if f[2].startswith(provider + ":")) for provider in PROVIDERS}
     for provider, count in counts.items():
-        if count:  # agents with no sessions on this machine would only push the index off screen
+        if count:
             row(f"{provider} sessions", str(count))
     if not any(counts.values()):
         row("sessions", "0")

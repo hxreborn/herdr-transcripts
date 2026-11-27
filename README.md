@@ -27,9 +27,8 @@ by title, prompt, reply or tool call.
 [Droid](https://factory.ai),
 [Copilot CLI](https://github.com/github/copilot-cli),
 [Kimi Code](https://github.com/MoonshotAI/kimi-cli),
-[Qwen Code](https://github.com/QwenLM/qwen-code) and the Antigravity CLI (`agy`: transcripts in
-`~/.gemini/antigravity-cli/brain/`, titles and folders from its `conversation_summaries.db`;
-subagent runs are hidden).
+[Qwen Code](https://github.com/QwenLM/qwen-code) and
+[Antigravity CLI](https://antigravity.google/docs/cli).
 
 `Ctrl+X` toggles each agent's own skip-permissions flag, `--yolo`,
 `--allow-all-tools` or `--auto high` as the agent spells it. `Ctrl+D` shows
