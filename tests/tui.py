@@ -68,8 +68,8 @@ def unit_tests():
     check("a mid-turn prompt is lifted out of its system reminder",
           found is not None and found.group(1) == "fix the gutter please")
     check("tabs stripped", "\t" not in vb.normalize("a\tb", 80))
-    check("scope nth for the conversation", vb.scope_nth("conversation") == "1,2,3")
-    check("scope nth for everything", vb.scope_nth("everything") == "1,2,3,4")
+    check("scope nth for the conversation", vb.scope_nth("conversation") == "..")
+    check("scope nth for everything", vb.scope_nth("everything") == "..")
     vb.SNAPSHOT[:] = [{"agents": [{"agent": "claude", "pane_id": "w1:p1",
                                    "agent_session": {"agent": "codex", "value": "sid-1"}}]}]
     check("live agents are keyed by the session's own agent name", list(vb.live_agents()) == ["codex:sid-1"])
@@ -149,6 +149,7 @@ def unit_tests():
         fh.write(compact({"type": "user", "isSidechain": False,
                           "message": {"role": "user", "content": "apply for the lighthouse keeper program"}}))
     entry, _ = vb.parse_transcript(long_claude)
+    check("the opening prompt survives preview eviction", entry["opening_prompt"] == "start the long job")
     check("search finds a late Claude prompt after many tool calls and a long conversation",
           "lighthouse keeper program" in entry["prompts"], entry["prompts"][-120:])
 
@@ -455,9 +456,18 @@ def binding_tests():
                                   capture_output=True, text=True, cwd=env["HOME"])
             check(f"`{' '.join(args) or '(picker)'}` is a command the plugin answers",
                   done.returncode == 0 and "usage:" not in done.stderr, done.stderr.strip()[:80])
-    index = os.path.join(sb.root, ".cache", "herdr-transcripts", "index.bin")
+    index = os.path.join(sb.root, ".cache", "herdr-transcripts", "index.json")
     check("warm builds the index without printing anything", os.path.exists(index) and not subprocess.run(
         [harness.PLUGIN + "/transcripts", "warm"], env=env, capture_output=True, text=True, cwd=env["HOME"]).stdout)
+    cache = os.path.dirname(index)
+    os.makedirs(os.path.join(cache, "turns"), exist_ok=True)
+    for name in ("index.bin", "index.bin.123.tmp", os.path.join("turns", "claude:old.json")):
+        with open(os.path.join(cache, name), "w") as fh:
+            fh.write("old cache")
+    subprocess.run([harness.PLUGIN + "/transcripts", "warm"], env=env, capture_output=True, cwd=env["HOME"])
+    leftovers = [name for name in ("index.bin", "index.bin.123.tmp", "turns") if os.path.exists(os.path.join(cache, name))]
+    check("warm removes the cache files older versions wrote", not leftovers, leftovers)
+    check("warm keeps the current index after removing the old cache", os.path.exists(index))
 
 
 def mouse_tests():
@@ -511,6 +521,71 @@ def write_transcript(sb, name, lines, cwd=None):
         for line in lines:
             fh.write(json.dumps(line, separators=(",", ":")) + "\n")
     return path
+
+
+def search_cache_tests():
+    sb = harness.sandbox("search-cache")
+    cwd = sb.sessions[0][1]
+    sid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    uid = "claude:" + sid
+    path = write_transcript(sb, sid, [
+        {"type": "custom-title", "customTitle": "Hand-picked title"},
+        {"type": "ai-title", "aiTitle": "Generated title"},
+        {"type": "api-request-blob", "message": {"role": "user", "content": "requestcopy"}},
+        {"type": "user", "isCompactSummary": True, "message": {"content": "contextsummary"}},
+        {"type": "user", "cwd": cwd, "message": {"content": "a" * 1800 + " pearlescent marker"}},
+        *[{"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": f"response number {i}"}]}} for i in range(205)],
+    ], cwd)
+    env = sb.env()
+
+    def run(*args):
+        return subprocess.check_output([harness.PLUGIN + "/transcripts", *args], env=env, text=True)
+
+    rows = run("list")
+    selected = next(row for row in rows.split("\0") if row.endswith(uid))
+    check("search skips request copies and compaction summaries",
+          "requestcopy" not in selected and "contextsummary" not in selected)
+    check("Claude's custom title wins over an automatic title", "Hand-picked title" in selected.split("\n")[0])
+    check("a long prompt is searched beyond its first thousand characters", "pearlescent" in selected)
+    snippet = run("preview", uid, "pearlescent")
+    check("preview retrieves an evicted turn and brings its match into view",
+          "pearlescent" in snippet and "a" * 160 not in snippet and "1 of 206 messages match" in snippet)
+    run("apply", "scope-set:prompts")
+    selected = next(row for row in run("list").split("\0") if row.endswith(uid))
+    check("prompt scope sends only prompt text to fzf", "pearlescent" in selected and "response number" not in selected)
+    cached = os.path.join(sb.root, ".cache", "herdr-transcripts", "search", uid)
+    stamp = os.stat(cached).st_mtime_ns
+    run("warm")
+    check("warming an unchanged session reuses its search data", os.stat(cached).st_mtime_ns == stamp)
+    os.remove(cached)
+    check("missing session search data is rebuilt", uid in run("list") and os.path.isfile(cached))
+    os.remove(path)
+    check("removing the source prunes its search data", uid not in run("list") and not os.path.exists(cached))
+
+    codex_id = sb.codex[1][0]
+    with open(os.path.join(sb.root, ".codex", "session_index.jsonl"), "a") as fh:
+        for name in ("Previous thread name", "Latest thread name"):
+            fh.write(json.dumps({"id": codex_id, "thread_name": name}) + "\n")
+    check("renaming an IDE thread updates a warm index", "Latest thread name" in run("list"))
+    run("apply", "agent-next")
+    picker = harness.run(sb)
+    picker.wait_idle()
+    picker.send("websocket")
+    check("a saved agent filter hides another agent's result", "0/" in picker.text().splitlines()[2])
+    picker.send("\x12")
+    check("reset filters keeps the query and finds the IDE thread", "Latest thread name" in picker.text()
+          and "websocket" in picker.text().splitlines()[2])
+    picker.send("\x15")
+    picker.send(codex_id)
+    check("pasting a session ID finds the matching row", "Latest thread name" in picker.text()
+          and re.search(r"\b1/\d+", picker.text().splitlines()[2]))
+    picker.close()
+
+    alternate = os.path.join(sb.root, "claude-profile")
+    os.rename(os.path.join(sb.root, ".claude"), alternate)
+    env["CLAUDE_CONFIG_DIR"] = alternate
+    check("a custom Claude profile supplies sessions", "claude:" + sb.sessions[0][0] in run("list"))
 
 
 def hostile_data_tests():
@@ -692,7 +767,7 @@ def diagnostics_tests():
     t.send("q")
     t.close()
 
-    index = os.path.join(sb.root, ".cache", "herdr-transcripts", "index.bin")
+    index = os.path.join(sb.root, ".cache", "herdr-transcripts", "index.json")
     with open(index, "w") as fh:
         fh.write("{ not json\n")
     t = harness.Term([harness.PLUGIN + "/transcripts", "overlay", "diagnostics"],
@@ -1115,6 +1190,7 @@ def kimi_tests():
 
 def main():
     unit_tests()
+    search_cache_tests()
     codex_tests()
     opencode_tests()
     gemini_tests()

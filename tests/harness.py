@@ -98,6 +98,8 @@ class Sandbox:
             "HERDR_PLUGIN_CONTEXT_JSON": json.dumps({"focused_pane_cwd": self.context_cwd}),
             "LINES": "", "COLUMNS": "",
         })
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        env.pop("CODEX_HOME", None)
         env.pop("HERDR_BIN_PATH", None)
         env.pop("HERDR_PLUGIN_CONFIG_DIR", None)
         env.pop("NO_COLOR", None)

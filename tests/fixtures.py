@@ -200,7 +200,7 @@ CODEX = [
                   ("exec", 'text(await tools.exec_command({cmd:"rg retry src/exporter"}));')],
     },
     {
-        "title": None, "project": "atlas-web", "age": 55 * MINUTE, "image": True,
+        "title": None, "project": "atlas-web", "age": 55 * MINUTE, "image": True, "source": "vscode",
         "turns": [
             ("you", "walk me through the websocket reconnect logic in the dashboard"),
             ("codex", "The client reconnects with exponential backoff capped at thirty seconds and replays the last cursor, so a dropped connection loses no events."),

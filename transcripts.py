@@ -3,7 +3,6 @@
 import fcntl
 import glob
 import json
-import marshal
 import os
 import re
 import select
@@ -15,11 +14,12 @@ import termios
 import time
 import tty
 import unicodedata
-from collections import deque
+from collections import Counter, deque
 
 HOME = os.path.expanduser("~")
-PROJECTS = os.path.join(HOME, ".claude", "projects")
-SETTINGS = os.path.join(HOME, ".claude", "settings.json")
+CLAUDE_HOME = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")
+PROJECTS = os.path.join(CLAUDE_HOME, "projects")
+SETTINGS = os.path.join(CLAUDE_HOME, "settings.json")
 CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")
 CODEX_SESSIONS = os.path.join(CODEX_HOME, "sessions")
 CODEX_NAMES = os.path.join(CODEX_HOME, "session_index.jsonl")
@@ -27,10 +27,18 @@ OPENCODE_HOME = os.path.join(HOME, ".local", "share", "opencode")
 DROID_SESSIONS = os.path.join(HOME, ".factory", "sessions")
 COPILOT_STATE = os.path.join(HOME, ".copilot", "session-state")
 CACHE_DIR = os.path.join(HOME, ".cache", "herdr-transcripts")
-INDEX = os.path.join(CACHE_DIR, "index.bin")
+if (os.path.abspath(CLAUDE_HOME), os.path.abspath(CODEX_HOME)) != (os.path.join(HOME, ".claude"),
+                                                                 os.path.join(HOME, ".codex")):
+    import hashlib
+    roots = os.fsencode(os.path.abspath(CLAUDE_HOME)) + b"\0" + os.fsencode(os.path.abspath(CODEX_HOME))
+    CACHE_DIR = os.path.join(CACHE_DIR, "profiles", hashlib.sha256(roots).hexdigest()[:24])
+INDEX = os.path.join(CACHE_DIR, "index.json")
+SEARCH_DIR = os.path.join(CACHE_DIR, "search")
 SNAPSHOT_FILE = os.path.join(CACHE_DIR, "snapshot.json")
 LOCK = os.path.join(CACHE_DIR, "lock")
-TURNS_DIR = os.path.join(CACHE_DIR, "turns")
+TURNS_DIR = os.path.join(CACHE_DIR, "previews")
+LEGACY_INDEX = os.path.join(CACHE_DIR, "index.bin")
+LEGACY_TURNS_DIR = os.path.join(CACHE_DIR, "turns")
 CONFIG_DIR = os.environ.get("HERDR_PLUGIN_CONFIG_DIR",
                             os.path.join(HOME, ".config", "herdr", "plugins", "config", "transcripts"))
 CONFIG = os.path.join(CONFIG_DIR, "config.toml")
@@ -44,8 +52,9 @@ CAP_TEXT = 120000
 CAP_CONVERSATION_TEXT = 1000000
 CAP_TURNS = 200
 CAP_TURN_CHARS = 1000
+CAP_SEARCH_MESSAGE = 4096
 CAP_FILES = 100
-INDEX_VERSION = "v12"
+INDEX_VERSION = "v13"
 POOL_MIN_BYTES = 24 << 20
 
 R = "\033[0m"
@@ -61,8 +70,8 @@ DEFAULTS = {
     "chrome": False,
 }
 
-SCOPES = [("conversation", "1,2,3"), ("titles", "1"), ("prompts", "2"),
-          ("replies", "3"), ("tools", "4"), ("everything", "1,2,3,4")]
+SCOPES = [("conversation", ".."), ("titles", ".."), ("prompts", "2"),
+          ("replies", "3"), ("tools", "4"), ("everything", "..")]
 SORTS = ["recent", "oldest", "size", "cwd"]
 TIMES = ["relative", "absolute"]
 FLAGS = [("skip_permissions", "skip-permissions", "--dangerously-skip-permissions", True),
@@ -340,7 +349,8 @@ def tool_files(given):
 
 def readonly_db(path):
     import sqlite3
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    from urllib.parse import quote
+    return sqlite3.connect(f"file:{quote(path)}?mode=ro", uri=True)
 
 
 CLAUDE_REPL_EVENT = re.compile(
@@ -352,13 +362,25 @@ CLAUDE_REPL_EVAL = re.compile(
 CLAUDE_TRANSCRIPT_PATH = re.compile(r"\.claude/projects(?=/|[^\w.-]|$)")
 
 
+def record_message(who, text, messages, turns, counts):
+    remaining = CAP_CONVERSATION_TEXT - counts[who]
+    text = normalize(text, max(CAP_TURN_CHARS, min(remaining, CAP_SEARCH_MESSAGE)))
+    turns.append([who, text])
+    if remaining:
+        indexed = text[:remaining]
+        messages.append(indexed)
+        counts[who] += len(indexed)
+
+
 def parse_transcript(path, agent="claude", title=""):
     cwd = branch = ""
+    custom_title = ""
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     tool_results = {}
     transcript_lookups, transcript_evals = set(), set()
-    total = tool_total = args_total = 0
+    tool_total = args_total = 0
+    conversation_chars = {"you": 0, agent: 0}
 
     def add_tool_result(text):
         nonlocal tool_total
@@ -375,6 +397,14 @@ def parse_transcript(path, agent="claude", title=""):
     with open(path, "rb") as fh:
         for raw in fh:
             head = raw[:400]
+            if b'"type":"api-request-blob"' in head:
+                continue
+            if b'"type":"custom-title"' in head:
+                try:
+                    custom_title = json.loads(raw).get("customTitle") or ""
+                except ValueError:
+                    pass
+                continue
             if b'"type":"ai-title"' in head:
                 try:
                     title = json.loads(raw).get("aiTitle", "") or title
@@ -390,10 +420,7 @@ def parse_transcript(path, agent="claude", title=""):
                     add_tool_result(text)
                     continue
                 if text and not text.startswith(METADATA):
-                    turns.append(["you", normalize(text, CAP_TURN_CHARS)])
-                    if total < CAP_CONVERSATION_TEXT:
-                        prompts.append(normalize(text, 1000))
-                        total += min(len(text), 1000)
+                    record_message("you", text, prompts, turns, conversation_chars)
                 continue
             is_user = b'"type":"user"' in head or b'"role":"user"' in head
             is_assistant = b'"role":"assistant"' in head or b'"type":"assistant"' in head
@@ -415,7 +442,7 @@ def parse_transcript(path, agent="claude", title=""):
                 continue
             if is_user and not cwd:
                 cwd, branch = o.get("cwd") or "", o.get("gitBranch") or ""
-            if o.get("isSidechain"):
+            if o.get("isSidechain") or o.get("isCompactSummary"):
                 continue
             content = o.get("message", {}).get("content")
             if isinstance(content, str):
@@ -440,10 +467,8 @@ def parse_transcript(path, agent="claude", title=""):
                         text = m.group(1).strip() if m else ""
                     if not text or text.startswith(METADATA) or text.startswith("[Request interrupted"):
                         continue
-                    turns.append(["you" if is_user else agent, normalize(text, CAP_TURN_CHARS)])
-                    if total < CAP_CONVERSATION_TEXT:
-                        (prompts if is_user else replies).append(normalize(text, 1000))
-                        total += min(len(text), 1000)
+                    record_message("you" if is_user else agent, text, prompts if is_user else replies,
+                                   turns, conversation_chars)
                 elif kind == "tool_result" and is_user:
                     if part.get("tool_use_id") in transcript_lookups:
                         metadata = o.get("toolUseResult")
@@ -461,20 +486,20 @@ def parse_transcript(path, agent="claude", title=""):
                     given = part.get("input")
                     if args_total < CAP_TEXT:
                         files += tool_files(given)
-                    text = tool_args(given)
+                    text = tool_args(given, part.get("name") or "").strip()
                     if part.get("id") and CLAUDE_TRANSCRIPT_PATH.search(text):
                         transcript_lookups.add(part["id"])
                     elif text and args_total < CAP_TEXT:
                         tools.append(normalize(text, 300))
                         args_total += min(len(text), 300)
-    entry, conversation = make_entry(title, cwd, branch, prompts, replies, tools, turns, files)
+    entry, conversation = make_entry(custom_title or title, cwd, branch, prompts, replies, tools, turns, files)
     return entry, conversation + [["tool", text] for text in tool_results]
 
 
 def make_entry(title, cwd, branch, prompts, replies, tools, turns, files=()):
     entry = {"title": normalize(title, 200), "cwd": cwd, "branch": normalize(branch, 80),
-             "prompts": " | ".join(prompts), "replies": " | ".join(replies), "tools": " | ".join(tools),
-             "opening_prompt": next((text for _, text in turns if text != "[image]"), ""),
+             "prompts": "\0".join(prompts), "replies": "\0".join(replies), "tools": "\0".join(tools),
+             "opening_prompt": prompts[0][:90] if prompts else next((text for _, text in turns if text != "[image]"), ""),
              "files": list(dict.fromkeys(files))[:CAP_FILES + 1]}
     return entry, list(turns)
 
@@ -489,6 +514,7 @@ CODEX_THREADS = []
 def codex_threads():
     if not CODEX_THREADS:
         threads = {}
+        names = {}
         for db_path in sorted(glob.glob(os.path.join(CODEX_HOME, "state_*.sqlite"))):
             try:
                 db = readonly_db(db_path)
@@ -502,14 +528,24 @@ def codex_threads():
                 for line in fh:
                     try:
                         o = json.loads(line)
-                        name, branch = threads.get(o["id"], ("", ""))
-                        threads[o["id"]] = (name or o.get("thread_name") or "", branch)
+                        if o.get("thread_name"):
+                            names[o["id"]] = o["thread_name"]
                     except Exception:
                         pass
         except OSError:
             pass
+        for sid, latest in names.items():
+            name, branch = threads.get(sid, ("", ""))
+            threads[sid] = (name or latest, branch)
         CODEX_THREADS.append(threads)
     return CODEX_THREADS[0]
+
+
+def codex_scan(provider, spec):
+    names = codex_threads()
+    for mtime, size, uid, path, key in glob_scan(provider, spec):
+        name, branch = names.get(uid.partition(":")[2], ("", ""))
+        yield mtime, size, uid, path, json.dumps([key, name, branch])
 
 
 def codex_sid(path):
@@ -539,19 +575,26 @@ def parse_codex(path):
     cwd = ""
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
-    total = args_total = 0
+    conversation_chars = {"you": 0, "codex": 0}
+    args_total = 0
     with open(path, "rb") as fh:
         for raw in fh:
             head = raw[:300]
             if b'"type":"session_meta"' in head:
-                meta = json.loads(raw).get("payload") or {}
-                if (meta.get("source") or "cli") != "cli" or meta.get("thread_source") == "subagent":
+                try:
+                    meta = json.loads(raw).get("payload") or {}
+                except ValueError:
+                    continue
+                if (meta.get("source") or "cli") not in ("cli", "vscode") or meta.get("thread_source") == "subagent":
                     break
                 cwd = meta.get("cwd") or ""
                 continue
             if b'"type":"turn_context"' in head:
                 if not cwd:
-                    cwd = (json.loads(raw).get("payload") or {}).get("cwd") or ""
+                    try:
+                        cwd = (json.loads(raw).get("payload") or {}).get("cwd") or ""
+                    except ValueError:
+                        pass
                 continue
             if b'"patch_apply_end"' in head:
                 files += codex_patch_files(raw)
@@ -584,15 +627,15 @@ def parse_codex(path):
                     if not cwd and role == "user":
                         m = CODEX_CWD.search(text)
                         cwd = m.group(1).strip() if m else ""
+                    if text.startswith("<recommended_plugins>") and text.endswith("</recommended_plugins>"):
+                        continue
                     if text and not text.startswith(CODEX_NOISE):
                         texts.append(text)
             text = " ".join(texts)
             if not text:
                 continue
-            turns.append(["you" if role == "user" else "codex", normalize(text, CAP_TURN_CHARS)])
-            if total < CAP_CONVERSATION_TEXT:
-                (prompts if role == "user" else replies).append(normalize(text, 1000))
-                total += min(len(text), 1000)
+            record_message("you" if role == "user" else "codex", text, prompts if role == "user" else replies,
+                           turns, conversation_chars)
     title, branch = codex_threads().get(codex_sid(path), ("", ""))
     return make_entry(title, cwd, branch, prompts, replies, tools, turns, files)
 
@@ -601,8 +644,9 @@ def opencode_scan(provider, spec):
     path = os.path.join(spec["root"], "opencode.db")
     try:
         db = readonly_db(path)
-        sizes = dict(db.execute("select session_id, sum(length(cast(data as blob)))"
-                                " from part group by session_id"))
+        import sqlite3
+        length = "octet_length(data)" if sqlite3.sqlite_version_info >= (3, 43) else "length(cast(data as blob))"
+        sizes = dict(db.execute(f"select session_id, sum({length}) from part group by session_id"))
         sessions = db.execute("select id, time_updated from session where parent_id is null").fetchall()
         db.close()
     except Exception:
@@ -1135,7 +1179,7 @@ PROVIDERS = {
                "parse": parse_transcript, "resume": ("claude", "--resume", "{sid}"), "resumes_from_any_cwd": True,
                "flags": {key: (flag,) for key, _, flag, _ in FLAGS},
                "install": "npm install -g @anthropic-ai/claude-code"},
-    "codex": {"root": CODEX_SESSIONS, "files": os.path.join(CODEX_HOME, "*sessions", "**", "*.jsonl"), "sid": codex_sid,
+    "codex": {"root": CODEX_SESSIONS, "scan": codex_scan, "files": os.path.join(CODEX_HOME, "*sessions", "**", "*.jsonl"), "sid": codex_sid,
               "parse": parse_codex, "resume": ("codex", "resume", "{sid}"), "resumes_from_any_cwd": True,
               "flags": {"skip_permissions": ("--yolo",)}, "install": "npm install -g @openai/codex"},
     "opencode": {"root": OPENCODE_HOME, "scan": opencode_scan, "parse": parse_opencode,
@@ -1201,21 +1245,45 @@ def write_json(path, data, indent=None):
     os.replace(tmp, path)
 
 
-def write_index(data):
-    tmp = f"{INDEX}.{os.getpid()}.tmp"
+def read_index():
+    with open(INDEX, encoding="utf-8") as fh:
+        entries = json.load(fh)
+    if not isinstance(entries, dict) or not all(isinstance(e, dict) for e in entries.values()):
+        raise ValueError("invalid transcript index")
+    return entries
+
+
+SEARCH_FIELDS = ("prompts", "replies", "tools")
+
+
+def write_search(uid, entry):
+    path = os.path.join(SEARCH_DIR, uid)
+    tmp = f"{path}.{os.getpid()}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as fh:
-        marshal.dump(data, fh)
-    os.replace(tmp, INDEX)
+        for name in SEARCH_FIELDS:
+            fh.write(entry.pop(name).encode("utf-8", errors="replace") + b"\n")
+    os.replace(tmp, path)
 
 
-def read_index():
-    with open(INDEX, "rb") as fh:
-        return marshal.load(fh)
+def search_fields(uid, scope):
+    fields = ["", "", ""]
+    if scope == "titles":
+        return fields
+    if scope in SEARCH_FIELDS:
+        selected = (SEARCH_FIELDS.index(scope),)
+    else:
+        selected = (0, 1, 2) if scope == "everything" else (0, 1)
+    with open(os.path.join(SEARCH_DIR, uid), "rb") as fh:
+        for i in range(selected[-1] + 1):
+            line = fh.readline()
+            if i in selected:
+                fields[i] = line.rstrip(b"\n").decode("utf-8", errors="replace")
+    return fields
 
 
 def glob_scan(provider, spec):
-    for path in glob.glob(spec["files"], recursive=True):
+    for path in glob.iglob(spec["files"], recursive=True):
         try:
             st = os.stat(path)
         except OSError:
@@ -1226,10 +1294,15 @@ def glob_scan(provider, spec):
 
 
 def transcript_files():
-    found = []
+    CODEX_THREADS.clear()
+    AGY_META.clear()
+    found = {}
     for provider, spec in PROVIDERS.items():
-        found.extend(spec.get("scan", glob_scan)(provider, spec))
-    return found
+        for record in spec.get("scan", glob_scan)(provider, spec):
+            uid = record[2]
+            if uid not in found or record > found[uid]:
+                found[uid] = record
+    return list(found.values())
 
 
 def load_cache(files):
@@ -1239,16 +1312,32 @@ def load_cache(files):
         cache = {}
     stale = [(row, uid, path, size) for row, (mtime, size, uid, path, key) in enumerate(files)
              if (cache.get(uid) or {}).get("key") != key or not os.path.exists(turns_path(uid))
+             or not os.path.isfile(os.path.join(SEARCH_DIR, uid))
              or "paths" in cache[uid] and cache[uid]["paths"] != len(project_paths(cache))]
     return cache, stale
 
 
-def index_entries(files):
+def remove_legacy_cache():
+    if not os.path.exists(LEGACY_INDEX) and not os.path.isdir(LEGACY_TURNS_DIR):
+        return
+    for path in glob.glob(glob.escape(LEGACY_INDEX) + "*"):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    shutil.rmtree(LEGACY_TURNS_DIR, ignore_errors=True)
+
+
+def index_entries(files, sort="recent"):
+    remove_legacy_cache()
     os.makedirs(TURNS_DIR, mode=0o700, exist_ok=True)
+    os.makedirs(SEARCH_DIR, mode=0o700, exist_ok=True)
     cache, stale = load_cache(files)
-    if stale:
+    if stale or set(cache) != {f[2] for f in files}:
         lock = open(LOCK, "w")
         fcntl.flock(lock, fcntl.LOCK_EX)
+        files = sorted(transcript_files(), key=sort_key(sort))
+        PROJECT_PATHS.clear()
         cache, stale = load_cache(files)
     parsed = parse_jobs([(uid, path) for _, uid, path, _ in stale], sum(size for _, _, _, size in stale))
     reparse = {row for row, _, _, _ in stale}
@@ -1261,15 +1350,19 @@ def index_entries(files):
                 continue
             entry, turns = result
             entry["key"] = key
+            write_search(uid, entry)
             write_json(turns_path(uid), {"cwd": entry["cwd"], "branch": entry["branch"],
                                          "files": entry.pop("files"), "turns": turns})
         fresh[uid] = entry
         yield mtime, size, uid, entry
     if stale or set(fresh) != set(cache):
-        write_index(fresh)
-        for old in glob.glob(os.path.join(TURNS_DIR, "*.json")):
-            if os.path.basename(old)[:-len(".json")] not in fresh:
-                os.remove(old)
+        write_json(INDEX, fresh)
+        for uid in cache.keys() - fresh.keys():
+            for path in (turns_path(uid), os.path.join(SEARCH_DIR, uid)):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
 
 
 def status_chip(agent):
@@ -1295,13 +1388,12 @@ def render_row(mtime, size, uid, entry, settings, live, current):
     meta = C["dim"] + "  ·  ".join(parts) + R
     if uid in live:
         meta = status_chip(live[uid]) + f"{C['dim']}  ·  {R}" + meta
-    tools = entry["tools"] if searches_tools(settings["scope"]) else ""
-    return (f"{head}\n  {meta}{HIDDEN_FIELD_GAP}\t{entry['prompts']}\t{entry['replies']}"
-            f"\t{tools}\t{entry['cwd']}\t{uid}")
+    fields = [value.replace("\0", " | ") for value in search_fields(uid, settings["scope"])]
+    return "\t".join([f"{head}\n  {meta}{HIDDEN_FIELD_GAP}", *fields, entry["cwd"], uid])
 
 
-def searches_tools(scope):
-    return "4" in scope_nth(scope)
+def sort_key(sort):
+    return {"oldest": lambda f: f[0], "size": lambda f: -f[1]}.get(sort, lambda f: -f[0])
 
 
 def list_rows():
@@ -1311,13 +1403,13 @@ def list_rows():
     here = current if settings["cwd_only"] else ""
     files = transcript_files()
     sort = settings["sort"]
-    files.sort(key={"oldest": lambda f: f[0], "size": lambda f: -f[1]}.get(sort, lambda f: -f[0]))
+    files.sort(key=sort_key(sort))
 
     def keep(entry):
         return (entry.get("cwd") and (entry.get("title") or entry.get("opening_prompt"))
                 and (not here or entry["cwd"] == here))
 
-    rows = index_entries(files)
+    rows = index_entries(files, sort)
     if sort == "cwd":
         rows = sorted((r for r in rows if keep(r[3])), key=lambda r: (r[3]["cwd"], -r[0]))
     first = True
@@ -1325,9 +1417,13 @@ def list_rows():
     for mtime, size, uid, entry in rows:
         if not keep(entry) or (agent != "all" and not uid.startswith(agent + ":")):
             continue
+        try:
+            row = render_row(mtime, size, uid, entry, settings, live, current)
+        except FileNotFoundError:
+            continue
         if not first:
             sys.stdout.write("\0")
-        sys.stdout.write(render_row(mtime, size, uid, entry, settings, live, current))
+        sys.stdout.write(row)
         sys.stdout.flush()
         first = False
 
@@ -1377,12 +1473,17 @@ def touched_line(cwd, given):
 
 
 def preview(uid, query):
-    terms = [t.lstrip("'^").rstrip("$") for t in query.split() if not t.startswith("!")]
+    terms = [t.lstrip("'^").rstrip("$") for t in query.split() if t != "|" and not t.startswith("!")]
     terms = [t for t in terms if t]
     pattern = re.compile("|".join(re.escape(t) for t in terms), re.I) if terms else None
 
     def highlight(text):
-        return pattern.sub(lambda m: f"{C['on_accent']}{m.group(0)}{R}", text) if pattern else text
+        if not pattern:
+            return text
+        first = pattern.search(text)
+        if first and first.start() > 160:
+            text = "…" + text[first.start() - 80:]
+        return pattern.sub(lambda m: f"{C['on_accent']}{m.group(0)}{R}", text)
 
     try:
         with open(turns_path(uid)) as fh:
@@ -1409,8 +1510,27 @@ def preview(uid, query):
         turns = [t for t in turns if (scope not in roles or t[0] in roles[scope])
                  and (t[0] != "tool" or scope in ("tools", "everything"))]
         hits = [t for t in turns if pattern.search(t[1])]
+        count = len(turns)
+        if scope != "titles":
+            recent = Counter((who, text) for who, text in turns)
+            try:
+                fields = search_fields(uid, scope)
+            except FileNotFoundError:
+                fields = []
+            for who, field in zip(("you", uid.partition(":")[0], "tool"), fields):
+                for text in field.split("\0"):
+                    if not text:
+                        continue
+                    if recent[who, text]:
+                        recent[who, text] -= 1
+                        continue
+                    count += 1
+                    if pattern.search(text):
+                        hits.append([who, text])
         if hits:
-            print(f"{C['dim']}{len(hits)} of {plural(len(turns), 'message')} match{R}\n")
+            if len(terms) > 1:
+                hits.sort(key=lambda hit: len({word.casefold() for word in pattern.findall(hit[1])}), reverse=True)
+            print(f"{C['dim']}{len(hits)} of {plural(count, 'message')} match{R}\n")
             turns = hits
         else:
             print(f"{C['dim']}no match in the {plural(len(turns), 'indexed message')} below{R}\n")
@@ -1433,6 +1553,8 @@ KEYS = [
      "chip": lambda s: "keys", "prio": 5},
     {"key": "ctrl-d", "help": "diagnostics: retention, index, tools",
      "raw": f"execute({Q} overlay diagnostics)", "chip": lambda s: "checks", "prio": 6},
+    {"key": "ctrl-r", "help": "search the conversation across all agents and directories",
+     "setting": "reset-filters", "prio": 5},
     {"key": "ctrl-t", "help": "relative or absolute times", "setting": "time", "prio": 4},
     {"key": "ctrl-v", "alias": "ctrl-/", "help": "show or hide the transcript preview",
      "raw": "toggle-preview", "prio": 7},
@@ -1538,8 +1660,10 @@ def scope_nth(name):
 
 def apply_setting(name):
     settings = read_settings()
-    had_tools = searches_tools(settings["scope"])
-    if name == "scope-next":
+    if name == "reset-filters":
+        for key in ("scope", "agent", "cwd_only"):
+            settings[key] = DEFAULTS[key]
+    elif name == "scope-next":
         names = [n for n, _ in SCOPES]
         settings["scope"] = names[(names.index(settings["scope"]) + 1) % len(names)]
     elif name.startswith("scope-set:"):
@@ -1559,9 +1683,8 @@ def apply_setting(name):
     else:
         return "ignore"
     write_settings(settings)
-    if name.startswith("scope"):
-        fetch = f"reload({Q} list)+" if searches_tools(settings["scope"]) != had_tools else ""
-        return fetch + f"change-nth({scope_nth(settings['scope'])})+" + refresh_bars()
+    if name.startswith("scope") or name == "reset-filters":
+        return f"reload({Q} list)+change-nth({scope_nth(settings['scope'])})+" + refresh_bars()
     if name.startswith("flag:"):
         return refresh_bars()
     return f"reload({Q} list)+" + refresh_bars()
@@ -1685,7 +1808,7 @@ def help_lines():
     for k in KEYS:
         out.append(f"{C['accent']}{k['key']:<8}{R}{C['text']}{k['help']}{R}")
     out += ["",
-            f"{C['dim']}Typing filters on whole words. Prefix a word with ' to match it{R}",
+            f"{C['dim']}Type part of a word to match it. Prefix a word with ' to match it{R}",
             f"{C['dim']}fuzzily, ! to exclude it, ^ or $ to anchor it.{R}",
             "",
             f"{C['dim']}Every chip in the header and the footer is clickable, and the{R}",
@@ -1766,7 +1889,8 @@ def diagnose_lines():
         row("cache", short_path(CACHE_DIR))
         row("indexed sessions", str(len(entries)))
         row("index size", human_size(st.st_size + sum(
-            os.path.getsize(f) for f in glob.glob(os.path.join(TURNS_DIR, "*.json")))))
+            os.path.getsize(f) for directory in (SEARCH_DIR, TURNS_DIR)
+            for f in glob.glob(os.path.join(directory, "*")))))
         row("last rebuilt", relative(st.st_mtime))
         row("stale entries", str(stale), C["warn"] + B if stale else "")
         skipped = [f[3] for f in every if f[2] not in entries and f[0] <= st.st_mtime]
@@ -1944,7 +2068,8 @@ def check_requirements():
             f"{C['dim']}The picker draws its list with --gutter, which arrived in fzf {need}.{R}", "",
             f"{C['dim']}Upgrade: https://github.com/junegunn/fzf/releases{R}"])
         return False
-    if not transcript_files():
+    if not any(next(iter(spec.get("scan", glob_scan)(name, spec)), None)
+               for name, spec in PROVIDERS.items()):
         show_message("No sessions yet", [
             f"{C['text']}No transcripts were found in{R}",
             *[f"  {C['dim']}{short_path(spec['root'])}{R}" for spec in PROVIDERS.values()], "",
