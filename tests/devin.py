@@ -15,6 +15,7 @@ PLUGIN_CMD = os.path.join(harness.PLUGIN, "transcripts")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 MAIN = "dddddddd-0000-4000-8000-000000000001"
 HIDDEN = "dddddddd-0000-4000-8000-000000000002"
+BRANCHED = "dddddddd-0000-4000-8000-000000000003"
 
 
 def check(name, ok, detail=""):
@@ -72,6 +73,17 @@ def build(sb):
     ]
     db.executemany("insert into message_nodes (session_id, node_id, chat_message, created_at) values (?, ?, ?, ?)",
                    [(sid, i, m, now - 50 + i) for i, (sid, m) in enumerate(rows)])
+    db.execute("insert into sessions (id, working_directory, created_at, last_activity_at, title, main_chain_id, hidden)"
+               " values (?, ?, ?, ?, ?, ?, ?)", (BRANCHED, cwd, now - 60, now - 1, "Kookaburra retry", 3, 0))
+    branched = [
+        (1, None, msg("user", "kookaburra question", metadata={"is_user_input": True})),
+        (2, 1, msg("assistant", "abandoned kookaburraretry answer")),
+        (3, 1, msg("assistant", "kept kookaburra answer",
+                   tool_calls=[{"id": "t2", "name": "read", "index": 0, "kind": "function",
+                                "arguments": {"file_path": os.path.join(cwd, "kookaburraflat.py")}}])),
+    ]
+    db.executemany("insert into message_nodes (session_id, node_id, parent_node_id, chat_message, created_at)"
+                   " values (?, ?, ?, ?, ?)", [(BRANCHED, n, parent, m, now - 40 + n) for n, parent, m in branched])
     db.commit()
     db.close()
     return cwd, os.path.join(path, "sessions.db")
@@ -93,6 +105,9 @@ def main():
     check("tool calls are indexed as tools", "run_command" in rows_all and "platypusdir" in rows_all)
     check("tool results are indexed as tools", "platypustooloutput" in rows_all)
     check("tools stay out of the conversation scope", "platypusdir" not in rows)
+    check("flat tool calls are indexed as tools", "read" in rows_all and "kookaburraflat.py" in rows_all, rows_all[:600])
+    check("the active chain is kept", "kept kookaburra answer" in rows_all)
+    check("abandoned branches are not indexed", "kookaburraretry" not in rows_all)
     set_scope(sb, "conversation")
     preview = run(sb, "preview", "devin:" + MAIN, "").stdout
     check("the preview labels who asked", "you ›" in preview and "billing rounding" in preview, preview[:400])

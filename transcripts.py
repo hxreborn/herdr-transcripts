@@ -922,16 +922,29 @@ def devin_scan(provider, spec):
     return found
 
 
+def devin_chain(db, sid, tip):
+    rows = db.execute("select node_id, parent_node_id, chat_message from message_nodes where session_id = ?"
+                      " order by created_at, row_id", (sid,)).fetchall()
+    nodes = {node: (parent, raw) for node, parent, raw in rows}
+    if tip not in nodes:
+        return [raw for _, _, raw in rows]
+    chain, node = [], tip
+    while node in nodes and len(chain) < len(nodes):
+        node, raw = nodes[node]
+        chain.append(raw)
+    return chain[::-1]
+
+
 def parse_devin(path):
     db_path, _, sid = path.rpartition("/")
     prompts, replies, tools, files = [], [], [], []
     turns = deque(maxlen=CAP_TURNS)
     total = tool_total = 0
     db = readonly_db(db_path)
-    row = db.execute("select title, working_directory from sessions where id = ?", (sid,)).fetchone() or ("", "")
+    row = db.execute("select title, working_directory, main_chain_id from sessions where id = ?",
+                     (sid,)).fetchone() or ("", "", None)
     title, cwd = row[0] or "", row[1] or ""
-    for (raw,) in db.execute("select chat_message from message_nodes where session_id = ? order by created_at, row_id",
-                             (sid,)):
+    for raw in devin_chain(db, sid, row[2]):
         try:
             o = json.loads(raw)
         except Exception:
@@ -947,11 +960,12 @@ def parse_devin(path):
             continue
         calls = o.get("tool_calls")
         for call in calls if isinstance(calls, list) else []:
-            given = call.get("function") if isinstance(call, dict) else None
+            given = call.get("function", call) if isinstance(call, dict) else None
             if not isinstance(given, dict) or tool_total >= CAP_TEXT:
                 continue
-            files += tool_files(given.get("arguments"))
-            line = normalize(f"{given.get('name') or ''} {given.get('arguments') or ''}", 300)
+            name, args = given.get("name") or "", given.get("arguments")
+            files += tool_files(args)
+            line = normalize(tool_args(args, name) if isinstance(args, dict) else f"{name} {args or ''}", 300)
             if line:
                 tools.append(line)
                 tool_total += len(line)
