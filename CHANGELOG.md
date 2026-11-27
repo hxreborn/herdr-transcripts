@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-11-27
+
+### Added
+
+- Devin CLI sessions from `~/.local/share/devin/cli/sessions.db`. A branched
+  session shows the conversation on its current branch, and resume runs
+  `devin --resume <id>`.
+- Antigravity CLI (`agy`) conversations from `~/.gemini/antigravity-cli`, with
+  titles and working directories from its conversation summaries. Resume
+  runs `agy --conversation <id>`.
+- Search interactive Codex IDE sessions, Claude custom session titles, full
+  project paths, and session IDs. Ctrl+R clears scope, agent, and directory
+  filters while keeping the current query.
+- Read Claude profiles from `CLAUDE_CONFIG_DIR`.
+
+### Fixed
+
+- Prompts and replies late in a long Claude or Codex session are now
+  searchable. Tool arguments used to share the conversation's text budget, so a
+  session with many tool calls stopped indexing what was said after them.
+- Search up to 4,096 characters of each indexed Claude or Codex message.
+  Previews can show matches older than the last 200 turns and bring a match
+  late in a long message into view.
+- Refresh Codex names and branches when thread metadata changes between runs.
+- Keep Claude request copies and compaction summaries out of conversation
+  search. A long session retains its original prompt as its fallback title.
+- Collapse duplicate copies of the same provider session into one result.
+
+### Changed
+
+- Store searchable text per session and keep the shared index small. Updating
+  one conversation rewrites its search data and preview. Narrow scopes send
+  only the selected text fields to fzf.
+- Stop scanning as soon as the launch check finds a transcript. On SQLite
+  3.43 and newer, OpenCode session sizes use stored byte lengths.
+- On a Linux workstation with 30.5 GiB of source transcripts and about 3,500
+  visible sessions, the first build took 41 seconds. With a warm index the
+  prompts-only picker opened in 0.69 seconds and the conversation picker in
+  0.81 seconds (median of three opens each, fzf 0.75).
+- `INDEX_VERSION` moved to v13, so the first run after upgrading reparses every
+  session once. The old `index.bin` and `turns` cache from earlier versions is
+  removed on that run.
+
 ## [1.3.2] - 2026-11-22
 
 ### Fixed
@@ -111,6 +154,7 @@ All notable changes to this project are documented here. The format follows
 - Diagnostics overlay (`Ctrl+D`) covering dependency versions, index state,
   session counts and Claude Code's `cleanupPeriodDays`, with a one-key fix.
 
+[1.4.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/hxreborn/herdr-transcripts/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/hxreborn/herdr-transcripts/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/hxreborn/herdr-transcripts/compare/v1.2.0...v1.3.0
