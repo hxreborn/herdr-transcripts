@@ -897,6 +897,90 @@ def parse_qwen(path):
     return make_entry("", cwd, branch, prompts, replies, tools, turns, files)
 
 
+DEVIN_HOME = os.path.join(HOME, ".local", "share", "devin", "cli")
+DEVIN_DB = os.path.join(DEVIN_HOME, "sessions.db")
+
+
+def devin_scan(provider, spec):
+    try:
+        db = readonly_db(DEVIN_DB)
+        counts = dict(db.execute("select session_id, count(*) from message_nodes group by session_id"))
+        sessions = db.execute("select id, last_activity_at, main_chain_id, working_directory, title from sessions"
+                              " where coalesce(hidden, 0) = 0").fetchall()
+        db.close()
+    except Exception:
+        return []
+    found = []
+    for sid, active, tip, cwd, title in sessions:
+        count = counts.get(sid) or 0
+        if not count:
+            continue
+        found.append((float(active or 0), 0, f"{provider}:{sid}", f"{DEVIN_DB}/{sid}",
+                      f"{INDEX_VERSION}:{active}:{count}:{tip}:{cwd}:{title}"))
+    return found
+
+
+def devin_chain(db, sid, tip):
+    rows = db.execute("select node_id, parent_node_id, chat_message from message_nodes where session_id = ?"
+                      " order by created_at, row_id", (sid,)).fetchall()
+    nodes = {node: (parent, raw) for node, parent, raw in rows}
+    if tip not in nodes:
+        return [raw for _, _, raw in rows]
+    chain, node = [], tip
+    while node in nodes and len(chain) < len(nodes):
+        node, raw = nodes[node]
+        chain.append(raw)
+    return chain[::-1]
+
+
+def parse_devin(path):
+    db_path, _, sid = path.rpartition("/")
+    prompts, replies, tools, files = [], [], [], []
+    turns = deque(maxlen=CAP_TURNS)
+    total = tool_total = 0
+    db = readonly_db(db_path)
+    row = db.execute("select title, working_directory, main_chain_id from sessions where id = ?",
+                     (sid,)).fetchone() or ("", "", None)
+    title, cwd = row[0] or "", row[1] or ""
+    for raw in devin_chain(db, sid, row[2]):
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(o, dict):
+            continue
+        role, content = o.get("role"), o.get("content")
+        text = content.strip() if isinstance(content, str) else ""
+        if role == "tool":
+            if text and tool_total < CAP_TEXT:
+                tools.append(normalize(text, 300))
+                tool_total += min(len(text), 300)
+            continue
+        calls = o.get("tool_calls")
+        for call in calls if isinstance(calls, list) else []:
+            given = call.get("function", call) if isinstance(call, dict) else None
+            if not isinstance(given, dict) or tool_total >= CAP_TEXT:
+                continue
+            name, args = given.get("name") or "", given.get("arguments")
+            files += tool_files(args)
+            line = normalize(tool_args(args, name) if isinstance(args, dict) else f"{name} {args or ''}", 300)
+            if line:
+                tools.append(line)
+                tool_total += len(line)
+        meta = o.get("metadata") if isinstance(o.get("metadata"), dict) else {}
+        if role == "user" and meta.get("is_user_input") is not True:
+            continue
+        if role not in ("user", "assistant") or not text:
+            continue
+        who = "you" if role == "user" else "devin"
+        turns.append([who, normalize(text, CAP_TURN_CHARS)])
+        if total < CAP_CONVERSATION_TEXT:
+            (prompts if who == "you" else replies).append(normalize(text, 1000))
+            total += min(len(text), 1000)
+    db.close()
+    return make_entry(title, cwd, "", prompts, replies, tools, turns, files)
+
+
 def kimi_sid(path):
     return os.path.basename(os.path.dirname(path))
 
@@ -976,6 +1060,9 @@ PROVIDERS = {
              "sid": jsonl_sid, "parse": parse_qwen, "resume": ("qwen", "--resume", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},
              "install": "npm install -g @qwen-code/qwen-code"},
+    "devin": {"root": DEVIN_HOME, "scan": devin_scan, "parse": parse_devin,
+              "resume": ("devin", "--resume", "{sid}"), "resumes_from_any_cwd": True,
+              "install": "curl -fsSL https://cli.devin.ai/install.sh | bash"},
     "kimi": {"root": KIMI_SESSIONS, "files": os.path.join(KIMI_SESSIONS, "*", "*", "context.jsonl"),
              "sid": kimi_sid, "parse": parse_kimi, "resume": ("kimi", "--session", "{sid}"),
              "flags": {"skip_permissions": ("--yolo",)},
@@ -1557,8 +1644,12 @@ def diagnose_lines():
     out.append("")
 
     section("Transcripts")
-    for provider in PROVIDERS:
-        row(f"{provider} sessions", str(sum(1 for f in every if f[2].startswith(provider + ":"))))
+    counts = {provider: sum(1 for f in every if f[2].startswith(provider + ":")) for provider in PROVIDERS}
+    for provider, count in counts.items():
+        if count:
+            row(f"{provider} sessions", str(count))
+    if not any(counts.values()):
+        row("sessions", "0")
     row("directories", str(len({e["cwd"] for e in entries.values() if e.get("cwd")})) if entries else "not indexed yet")
     row("total size", human_size(sum(f[1] for f in every)))
     if ages:
